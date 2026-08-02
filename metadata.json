@@ -1,0 +1,6 @@
+{
+  "name": "坐哪儿 - 影厅视角模拟器",
+  "description": "全国IMAX/杜比影院3D选座视角与视效模拟器",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
