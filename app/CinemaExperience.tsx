@@ -4,10 +4,12 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   ArrowLeft,
+  ArrowCounterClockwise,
   CaretDown,
   CaretLeft,
   CaretRight,
   CaretUp,
+  FolderOpen,
   Lightbulb,
   Pause,
   Play,
@@ -93,7 +95,42 @@ export function CinemaExperience({
   const [mobilePanelTab, setMobilePanelTab] =
     useState<MobilePanelTab>("seats");
   const [isMobile, setIsMobile] = useState(false);
+  const [customVideoUrl, setCustomVideoUrl] = useState<string | null>(null);
+  const [customVideoName, setCustomVideoName] = useState<string | null>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
   const seatMapRef = useRef<HTMLDivElement>(null);
+
+  const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (customVideoUrl) {
+      URL.revokeObjectURL(customVideoUrl);
+    }
+    const newUrl = URL.createObjectURL(file);
+    setCustomVideoUrl(newUrl);
+    setCustomVideoName(file.name);
+    setFilmMode(true);
+    setPlaying(true);
+    setPlaybackToken((prev) => prev + 1);
+    e.target.value = "";
+  };
+
+  const handleResetVideo = () => {
+    if (customVideoUrl) {
+      URL.revokeObjectURL(customVideoUrl);
+    }
+    setCustomVideoUrl(null);
+    setCustomVideoName(null);
+    setPlaybackToken((prev) => prev + 1);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (customVideoUrl) {
+        URL.revokeObjectURL(customVideoUrl);
+      }
+    };
+  }, [customVideoUrl]);
 
   const auditorium =
     auditoriums.find((item) => item.id === auditoriumId) ?? auditoriums[0];
@@ -195,6 +232,7 @@ export function CinemaExperience({
             playbackToken={playbackToken}
             viewCommand={idleViewCommand}
             isMobile={isMobile}
+            customVideoUrl={customVideoUrl}
           />
 
           <button
@@ -215,6 +253,14 @@ export function CinemaExperience({
           </button>
 
           <div className="scene-controls">
+            <input
+              ref={videoInputRef}
+              type="file"
+              accept="video/*"
+              style={{ display: "none" }}
+              onChange={handleVideoSelect}
+            />
+
             <button
               className="film-picker film-play-control"
               type="button"
@@ -223,8 +269,8 @@ export function CinemaExperience({
               data-dbd-pattern="film-player"
               onClick={togglePlayback}
               aria-pressed={playing}
-              aria-label={`${playing ? "暂停影片" : "播放影片"}：IMAX Countdown`}
-              title={`${playing ? "暂停影片" : "播放影片"}：IMAX Countdown`}
+              aria-label={`${playing ? "暂停" : "播放"}：${customVideoName || "IMAX Countdown"}`}
+              title={`${playing ? "暂停" : "播放"}：${customVideoName || "IMAX Countdown"}`}
             >
               {playing ? (
                 <Pause size={18} weight="fill" />
@@ -232,9 +278,35 @@ export function CinemaExperience({
                 <Play size={18} weight="fill" />
               )}
               <strong>
-                {playing ? "暂停影片" : "播放影片"}：IMAX Countdown
+                {playing ? "暂停" : "播放"}：{customVideoName || "IMAX Countdown"}
               </strong>
             </button>
+
+            <button
+              className="scene-light-toggle"
+              type="button"
+              data-dbd-component="button"
+              data-dbd-variant="icon-only"
+              onClick={() => videoInputRef.current?.click()}
+              aria-label="打开本地视频文件"
+              title="打开本地视频文件"
+            >
+              <FolderOpen size={20} weight="regular" />
+            </button>
+
+            {customVideoUrl && (
+              <button
+                className="scene-light-toggle"
+                type="button"
+                data-dbd-component="button"
+                data-dbd-variant="icon-only"
+                onClick={handleResetVideo}
+                aria-label="恢复默认演示视频"
+                title="恢复默认演示视频"
+              >
+                <ArrowCounterClockwise size={20} weight="regular" />
+              </button>
+            )}
 
             <button
               className={`scene-light-toggle ${filmMode ? "is-dark" : ""}`}

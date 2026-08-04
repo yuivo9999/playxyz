@@ -1,4 +1,15 @@
-import type {NextConfig} from 'next';
+import type { NextConfig } from "next";
+
+const isGithubActions = process.env.GITHUB_ACTIONS === "true" || Boolean(process.env.GITHUB_ACTIONS);
+let repo = "";
+if (isGithubActions && process.env.GITHUB_REPOSITORY) {
+  const repoName = process.env.GITHUB_REPOSITORY.split("/")[1];
+  if (repoName && !repoName.endsWith(".github.io")) {
+    repo = `/${repoName}`;
+  }
+}
+
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || (repo ? repo : undefined);
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
@@ -8,23 +19,26 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
-  // Allow access to remote image placeholder.
+  output: isGithubActions ? "export" : undefined,
+  basePath: basePath,
+  assetPrefix: basePath,
+  env: {
+    NEXT_PUBLIC_BASE_PATH: basePath || "",
+  },
   images: {
+    unoptimized: true,
     remotePatterns: [
       {
-        protocol: 'https',
-        hostname: 'picsum.photos',
-        port: '',
-        pathname: '/**', // This allows any path under the hostname
+        protocol: "https",
+        hostname: "picsum.photos",
+        port: "",
+        pathname: "/**",
       },
     ],
   },
-  output: 'standalone',
-  transpilePackages: ['motion'],
-  webpack: (config, {dev}) => {
-    // HMR is disabled in AI Studio via DISABLE_HMR env var.
-    // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-    if (dev && process.env.DISABLE_HMR === 'true') {
+  transpilePackages: ["motion"],
+  webpack: (config, { dev }) => {
+    if (dev && process.env.DISABLE_HMR === "true") {
       config.watchOptions = {
         ignored: /.*/,
       };

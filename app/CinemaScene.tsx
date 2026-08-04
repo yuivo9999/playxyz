@@ -59,6 +59,7 @@ type CinemaSceneProps = {
   playbackToken: number;
   viewCommand: ViewCommand;
   isMobile: boolean;
+  customVideoUrl?: string | null;
 };
 
 const upVector = new Vector3(0, 1, 0);
@@ -578,13 +579,17 @@ function VideoSurface({
   active,
   playing,
   onReady,
-}: Pick<CinemaSceneProps, "auditorium" | "playing"> & {
+  customVideoUrl,
+}: Pick<CinemaSceneProps, "auditorium" | "playing" | "customVideoUrl"> & {
   active: boolean;
   onReady: () => void;
 }) {
+  const defaultSrc = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/imax-countdown.mp4`;
+  const videoSrc = customVideoUrl || defaultSrc;
+
   const texture = useMemo(() => {
     const video = document.createElement("video");
-    video.src = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/imax-countdown.mp4`;
+    video.src = videoSrc;
     video.crossOrigin = "anonymous";
     video.loop = true;
     video.muted = true;
@@ -594,7 +599,7 @@ function VideoSurface({
     const nextTexture = new VideoTexture(video);
     nextTexture.colorSpace = SRGBColorSpace;
     return nextTexture;
-  }, []);
+  }, [videoSrc]);
 
   useEffect(() => {
     const video = texture.image as HTMLVideoElement;
@@ -651,7 +656,23 @@ function VideoSurface({
   }, [active, onReady, playing, texture]);
 
   const screenAspect = auditorium.screenWidth / auditorium.screenHeight;
-  const videoAspect = 16 / 9;
+  const [videoAspect, setVideoAspect] = useState(16 / 9);
+
+  useEffect(() => {
+    const video = texture.image as HTMLVideoElement;
+    const handleLoadedMetadata = () => {
+      if (video.videoWidth && video.videoHeight) {
+        setVideoAspect(video.videoWidth / video.videoHeight);
+      }
+    };
+    if (video.readyState >= 1 && video.videoWidth) {
+      handleLoadedMetadata();
+    }
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    return () => {
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+    };
+  }, [texture]);
 
   useEffect(() => {
     if (videoAspect > screenAspect) {
@@ -706,9 +727,10 @@ function Screen({
   filmMode,
   playing,
   onFilmReady,
+  customVideoUrl,
 }: Pick<
   CinemaSceneProps,
-  "auditorium" | "filmMode" | "playing"
+  "auditorium" | "filmMode" | "playing" | "customVideoUrl"
 > & { onFilmReady: () => void }) {
   const centerY = auditorium.screenBottom + auditorium.screenHeight / 2;
   const screenTop = auditorium.screenBottom + auditorium.screenHeight;
@@ -771,6 +793,7 @@ function Screen({
         active={filmMode && playing}
         playing={playing}
         onReady={onFilmReady}
+        customVideoUrl={customVideoUrl}
       />
       {workLightOffsets.map((offset, index) => {
         const lightX = auditorium.screenWidth * offset;
@@ -1460,6 +1483,7 @@ function SceneContents(
         filmMode={filmMode}
         playing={props.playing}
         onFilmReady={props.onFilmReady}
+        customVideoUrl={props.customVideoUrl}
       />
       <AuditoriumArchitecture
         auditorium={auditorium}
