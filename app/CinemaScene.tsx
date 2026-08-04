@@ -7,7 +7,12 @@ interface CinemaSceneProps {
   auditorium: Auditorium;
   selectedSeats: string[];
   onToggleSeat: (seatId: string) => void;
+  videoElement?: HTMLVideoElement | null;
   videoUrl?: string;
+  videoTitle?: string;
+  isPlaying?: boolean;
+  lightsMode?: "off" | "on";
+  onToggleLights?: () => void;
 }
 
 const CinemaSceneInner = dynamic(() => import("./CinemaSceneInner"), {
