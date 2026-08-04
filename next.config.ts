@@ -38,7 +38,13 @@ const nextConfig: NextConfig = {
     ],
   },
   transpilePackages: ["motion"],
-  webpack: (config, { dev }) => {
+  webpack: (config, { dev, isServer }) => {
+    if (isServer) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        "@react-three/drei": false,
+      };
+    }
     if (dev && process.env.DISABLE_HMR === "true") {
       config.watchOptions = {
         ignored: /.*/,

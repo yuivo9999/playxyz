@@ -2,7 +2,9 @@
 
 import { useRef } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, Text, Float } from "@react-three/drei";
+import { OrbitControls } from "@react-three/drei/core/OrbitControls.js";
+import { Text } from "@react-three/drei/core/Text.js";
+import { Float } from "@react-three/drei/core/Float.js";
 import * as THREE from "three";
 import { Auditorium } from "./cinema-data";
 
@@ -23,7 +25,7 @@ function CinemaRoom({ auditorium, selectedSeats, onToggleSeat }: CinemaSceneProp
   });
 
   const rowLabels = ["A", "B", "C", "D", "E", "F", "G", "H"];
-  const seats = [];
+  const seats: React.ReactNode[] = [];
 
   for (let r = 0; r < Math.min(auditorium.rows, rowLabels.length); r++) {
     for (let c = 0; c < auditorium.cols; c++) {
