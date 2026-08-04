@@ -1,5 +1,9 @@
-import { CinemaFinder } from "./CinemaFinder";
+import { CinemaExperience } from "./CinemaExperience";
 
-export default function Home() {
-  return <CinemaFinder />;
+export default function HomePage() {
+  return (
+    <main className="min-h-screen">
+      <CinemaExperience />
+    </main>
+  );
 }

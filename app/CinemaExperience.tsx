@@ -1,640 +1,199 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import Link from "next/link";
-import {
-  ArrowLeft,
-  ArrowCounterClockwise,
-  CaretDown,
-  CaretLeft,
-  CaretRight,
-  CaretUp,
-  FolderOpen,
-  Lightbulb,
-  Pause,
-  Play,
-} from "@phosphor-icons/react";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
-import {
-  auditoriums,
-  buildSeats,
-  cinemas,
-  getAuditoriumById,
-  getSeatMetrics,
-  type Seat,
-} from "./cinema-data";
+import Image from "next/image";
+import { useState } from "react";
+import { auditoriums, getAuditoriumById } from "./cinema-data";
+import { CinemaScene } from "./CinemaScene";
+import { Film, Ticket, CheckCircle, Sparkles } from "lucide-react";
 
-const CinemaScene = dynamic(
-  () => import("./CinemaScene").then((module) => module.CinemaScene),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="scene-loading" role="status" aria-live="polite">
-        <div className="scene-loading-screen" />
-        <span>正在搭建影厅</span>
-      </div>
-    ),
-  },
-);
-
-const idleViewCommand = { yaw: 0, pitch: 0, token: 0 };
-type MobilePanelTab = "seats" | "info";
-
-function getPreferredAuditorium(initialAuditoriumId?: string) {
-  const requestedAuditorium =
-    getAuditoriumById(initialAuditoriumId ?? "") ?? auditoriums[0];
-
-  return (
-    auditoriums.find(
-      (item) =>
-        item.cinemaId === requestedAuditorium.cinemaId &&
-        item.name.startsWith("IMAX"),
-    ) ?? requestedAuditorium
-  );
-}
-
-function getDefaultSeatId(auditoriumId: string) {
-  const auditorium =
-    auditoriums.find((item) => item.id === auditoriumId) ?? auditoriums[0];
-  const seats = buildSeats(auditorium);
-  const centerRow = Math.floor(auditorium.rowCount / 2);
-  const centerSeat =
-    seats
-      .filter((seat) => seat.status === "available")
-      .sort(
-        (left, right) =>
-          Math.abs(left.row - centerRow) * 2 +
-          Math.abs(left.x) -
-          (Math.abs(right.row - centerRow) * 2 + Math.abs(right.x)),
-      )[0] ?? seats[0];
-
-  return centerSeat.id;
-}
-
-export function CinemaExperience({
-  initialAuditoriumId,
-}: {
+interface CinemaExperienceProps {
   initialAuditoriumId?: string;
-}) {
-  const initialAuditorium = getPreferredAuditorium(initialAuditoriumId);
-  const [auditoriumId, setAuditoriumId] = useState(initialAuditorium.id);
-  const [selectedSeatId, setSelectedSeatId] = useState(() =>
-    getDefaultSeatId(initialAuditorium.id),
-  );
-  const [filmMode, setFilmMode] = useState(false);
-  const [playing, setPlaying] = useState(false);
-  const [playbackToken, setPlaybackToken] = useState(0);
-  const [isSeatPanelCollapsed, setIsSeatPanelCollapsed] = useState(false);
-  const [isMobilePanelOpen, setIsMobilePanelOpen] = useState(false);
-  const [mobilePanelTab, setMobilePanelTab] =
-    useState<MobilePanelTab>("seats");
-  const [isMobile, setIsMobile] = useState(false);
-  const [customVideoUrl, setCustomVideoUrl] = useState<string | null>(null);
-  const [customVideoName, setCustomVideoName] = useState<string | null>(null);
-  const videoInputRef = useRef<HTMLInputElement>(null);
-  const seatMapRef = useRef<HTMLDivElement>(null);
+}
 
-  const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (customVideoUrl) {
-      URL.revokeObjectURL(customVideoUrl);
-    }
-    const newUrl = URL.createObjectURL(file);
-    setCustomVideoUrl(newUrl);
-    setCustomVideoName(file.name);
-    setFilmMode(true);
-    setPlaying(true);
-    setPlaybackToken((prev) => prev + 1);
-    e.target.value = "";
+export function CinemaExperience({ initialAuditoriumId = "auditorium-1" }: CinemaExperienceProps) {
+  const [selectedAuditoriumId, setSelectedAuditoriumId] = useState(initialAuditoriumId);
+  const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
+  const [isBooked, setIsBooked] = useState(false);
+
+  const auditorium = getAuditoriumById(selectedAuditoriumId) || auditoriums[0];
+
+  const handleToggleSeat = (seatId: string) => {
+    setSelectedSeats((prev) =>
+      prev.includes(seatId)
+        ? prev.filter((id) => id !== seatId)
+        : [...prev, seatId]
+    );
   };
 
-  const handleResetVideo = () => {
-    if (customVideoUrl) {
-      URL.revokeObjectURL(customVideoUrl);
-    }
-    setCustomVideoUrl(null);
-    setCustomVideoName(null);
-    setPlaybackToken((prev) => prev + 1);
+  const handleBooking = () => {
+    if (selectedSeats.length === 0) return;
+    setIsBooked(true);
   };
 
-  useEffect(() => {
-    return () => {
-      if (customVideoUrl) {
-        URL.revokeObjectURL(customVideoUrl);
-      }
-    };
-  }, [customVideoUrl]);
-
-  const auditorium =
-    auditoriums.find((item) => item.id === auditoriumId) ?? auditoriums[0];
-  const cinema =
-    cinemas.find((item) => item.id === auditorium.cinemaId) ?? cinemas[0];
-  const cinemaAuditoriums = auditoriums.filter(
-    (item) => item.cinemaId === cinema.id,
-  );
-  const seats = useMemo(() => buildSeats(auditorium), [auditorium]);
-  const selectedSeat =
-    seats.find((seat) => seat.id === selectedSeatId) ??
-    seats.find((seat) => seat.id === getDefaultSeatId(auditorium.id)) ??
-    seats[0];
-  const metrics = getSeatMetrics(auditorium, selectedSeat);
-  const lightActionLabel = filmMode ? "开灯" : "关灯";
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia("(max-width: 767px)");
-    const update = () => {
-      const nextIsMobile = mediaQuery.matches;
-      setIsMobile(nextIsMobile);
-      if (nextIsMobile) setIsSeatPanelCollapsed(false);
-    };
-    update();
-    mediaQuery.addEventListener("change", update);
-    return () => mediaQuery.removeEventListener("change", update);
-  }, []);
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      const seatMap = seatMapRef.current;
-      if (!seatMap) return;
-      seatMap.scrollLeft = Math.max(
-        0,
-        (seatMap.scrollWidth - seatMap.clientWidth) / 2,
-      );
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [auditorium.id, isMobilePanelOpen, mobilePanelTab]);
-
-  const switchAuditorium = (nextAuditoriumId: string) => {
-    setAuditoriumId(nextAuditoriumId);
-    setSelectedSeatId(getDefaultSeatId(nextAuditoriumId));
-  };
-
-  const selectSeat = (seat: Seat) => {
-    if (seat.status === "occupied") return;
-    setSelectedSeatId(seat.id);
-  };
-
-  const toggleFilmMode = () => {
-    const nextFilmMode = !filmMode;
-    setFilmMode(nextFilmMode);
-    setPlaying(nextFilmMode);
-    if (nextFilmMode) setPlaybackToken((current) => current + 1);
-  };
-
-  const togglePlayback = () => {
-    const nextPlaying = !playing;
-    if (!filmMode) setFilmMode(true);
-    setPlaying(nextPlaying);
-    if (nextPlaying) setPlaybackToken((current) => current + 1);
-  };
-
-  const showMobilePanelTab = (tab: MobilePanelTab) => {
-    setMobilePanelTab(tab);
-    setIsMobilePanelOpen(true);
+  const calculateTotal = () => {
+    return selectedSeats.length * 15;
   };
 
   return (
-    <main className="cinema-app" data-dbd-zone="cinema-shell">
-      <header className="topbar" data-dbd-zone="cinema-topbar">
-        <Link
-          className="back-to-cinemas"
-          href="/"
-          aria-label={`返回影院列表，当前影院：${cinema.city} ${cinema.name}`}
-        >
-          <ArrowLeft size={20} />
-          <strong>
-            {cinema.city} · {cinema.name}
-          </strong>
-        </Link>
-
-      </header>
-
-      <section
-        className={`experience-layout ${
-          isSeatPanelCollapsed ? "is-panel-collapsed" : ""
-        }`}
-        data-dbd-zone="cinema-workspace"
-      >
-        <div className="scene-shell" data-dbd-zone="cinema-scene">
-          <CinemaScene
-            auditorium={auditorium}
-            seats={seats}
-            selectedSeat={selectedSeat}
-            filmMode={filmMode}
-            playing={playing}
-            playbackToken={playbackToken}
-            viewCommand={idleViewCommand}
-            isMobile={isMobile}
-            customVideoUrl={customVideoUrl}
-          />
-
-          <button
-            className="scene-seat-status"
-            type="button"
-            onClick={() => showMobilePanelTab("seats")}
-            aria-live="polite"
-            aria-label={`打开座位图，当前为 ${selectedSeat.rowLabel} 排 ${selectedSeat.number} 座`}
-            aria-controls="mobile-seat-panel"
-            aria-expanded={
-              isMobile
-                ? isMobilePanelOpen && mobilePanelTab === "seats"
-                : undefined
-            }
-            tabIndex={isMobile ? 0 : -1}
-          >
-            {selectedSeat.rowLabel} 排 {selectedSeat.number} 座
-          </button>
-
-          <div className="scene-controls">
-            <input
-              ref={videoInputRef}
-              type="file"
-              accept="video/*"
-              style={{ display: "none" }}
-              onChange={handleVideoSelect}
-            />
-
-            <button
-              className="film-picker film-play-control"
-              type="button"
-              data-dbd-component="button"
-              data-dbd-variant="secondary"
-              data-dbd-pattern="film-player"
-              onClick={togglePlayback}
-              aria-pressed={playing}
-              aria-label={`${playing ? "暂停" : "播放"}：${customVideoName || "IMAX Countdown"}`}
-              title={`${playing ? "暂停" : "播放"}：${customVideoName || "IMAX Countdown"}`}
-            >
-              {playing ? (
-                <Pause size={18} weight="fill" />
-              ) : (
-                <Play size={18} weight="fill" />
-              )}
-              <strong>
-                {playing ? "暂停" : "播放"}：{customVideoName || "IMAX Countdown"}
-              </strong>
-            </button>
-
-            <button
-              className="scene-light-toggle"
-              type="button"
-              data-dbd-component="button"
-              data-dbd-variant="icon-only"
-              onClick={() => videoInputRef.current?.click()}
-              aria-label="打开本地视频文件"
-              title="打开本地视频文件"
-            >
-              <FolderOpen size={20} weight="regular" />
-            </button>
-
-            {customVideoUrl && (
-              <button
-                className="scene-light-toggle"
-                type="button"
-                data-dbd-component="button"
-                data-dbd-variant="icon-only"
-                onClick={handleResetVideo}
-                aria-label="恢复默认演示视频"
-                title="恢复默认演示视频"
-              >
-                <ArrowCounterClockwise size={20} weight="regular" />
-              </button>
-            )}
-
-            <button
-              className={`scene-light-toggle ${filmMode ? "is-dark" : ""}`}
-              type="button"
-              data-dbd-component="button"
-              data-dbd-variant="icon-only"
-              onClick={toggleFilmMode}
-              aria-pressed={filmMode}
-              aria-label={lightActionLabel}
-              title={lightActionLabel}
-            >
-              <Lightbulb
-                size={20}
-                weight={filmMode ? "regular" : "fill"}
-                aria-hidden="true"
-              />
-            </button>
-          </div>
-
-          <p className="gesture-hint">拖动观察银幕，视点固定在当前座位</p>
+    <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-white flex items-center gap-3">
+            <Film className="w-8 h-8 text-amber-500" />
+            3D Virtual Cinema Experience
+          </h1>
+          <p className="text-slate-400 mt-1">
+            Explore auditoriums, select 3D seating, and book movie tickets in real-time.
+          </p>
         </div>
 
-        {isMobilePanelOpen ? (
-          <button
-            className="mobile-sheet-dismiss-layer"
-            type="button"
-            aria-label="收起影厅面板"
-            aria-controls="mobile-seat-panel"
-            onClick={() => setIsMobilePanelOpen(false)}
-          />
-        ) : null}
-
-        <aside
-          className={`seat-panel ${
-            isSeatPanelCollapsed ? "is-collapsed" : ""
-          } ${isMobilePanelOpen ? "is-mobile-open" : ""} mobile-tab-${mobilePanelTab}`}
-          aria-label="选座与体验指标"
-          data-dbd-zone="cinema-seat-panel"
-          data-dbd-pattern="panel-sheet"
-        >
-          <div
-            className="mobile-sheet-header"
-            onClick={(event) => {
-              if ((event.target as HTMLElement).closest("button")) return;
-              setIsMobilePanelOpen((current) => !current);
-            }}
-          >
-            <div className="mobile-sheet-tabs" role="tablist" aria-label="影厅面板">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={mobilePanelTab === "seats"}
-                aria-controls="mobile-seat-panel"
-                className={mobilePanelTab === "seats" ? "is-selected" : ""}
-                onClick={() => showMobilePanelTab("seats")}
-              >
-                选座
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={mobilePanelTab === "info"}
-                aria-controls="mobile-info-panel"
-                className={mobilePanelTab === "info" ? "is-selected" : ""}
-                onClick={() => showMobilePanelTab("info")}
-              >
-                影院信息
-              </button>
-            </div>
+        {/* Auditorium Selector */}
+        <div className="flex flex-wrap gap-2">
+          {auditoriums.map((aud) => (
             <button
-              className="mobile-sheet-toggle"
-              type="button"
-              onClick={() => setIsMobilePanelOpen((current) => !current)}
-              aria-expanded={isMobilePanelOpen}
-              aria-label={isMobilePanelOpen ? "收起影厅面板" : "展开影厅面板"}
+              key={aud.id}
+              onClick={() => {
+                setSelectedAuditoriumId(aud.id);
+                setSelectedSeats([]);
+                setIsBooked(false);
+              }}
+              className={`px-4 py-2 rounded-lg font-medium text-sm transition-all ${
+                selectedAuditoriumId === aud.id
+                  ? "bg-amber-500 text-slate-950 shadow-lg shadow-amber-500/20"
+                  : "bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800"
+              }`}
             >
-              {isMobilePanelOpen ? (
-                <CaretDown size={18} />
-              ) : (
-                <CaretUp size={18} />
-              )}
+              {aud.name.split(" - ")[1] || aud.name}
             </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* 3D Viewport (2 cols) */}
+        <div className="lg:col-span-2 space-y-4">
+          <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-800 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-white">{auditorium.name}</h2>
+              <p className="text-xs text-slate-400">{auditorium.type} • {auditorium.soundSystem}</p>
+            </div>
+            <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs px-3 py-1 rounded-full font-medium">
+              Now Showing: {auditorium.movieTitle}
+            </span>
           </div>
 
-          <button
-            className="panel-collapse-toggle"
-            type="button"
-            onClick={() => setIsSeatPanelCollapsed((current) => !current)}
-            aria-expanded={!isSeatPanelCollapsed}
-            aria-label={
-              isSeatPanelCollapsed
-                ? "展开选座与体验指标"
-                : "收起选座与体验指标"
-            }
-          >
-            {isSeatPanelCollapsed ? (
-              <CaretLeft size={18} />
-            ) : (
-              <CaretRight size={18} />
-            )}
-          </button>
+          <CinemaScene
+            auditorium={auditorium}
+            selectedSeats={selectedSeats}
+            onToggleSeat={handleToggleSeat}
+          />
 
-          <div
-            className="seat-panel-content"
-            hidden={
-              isSeatPanelCollapsed || (isMobile && !isMobilePanelOpen)
-            }
-          >
-            <div
-              className="panel-info-content"
-              id="mobile-info-panel"
-              role={isMobile ? "tabpanel" : undefined}
-              hidden={isMobile && mobilePanelTab !== "info"}
-            >
-            <div className="auditorium-heading">
-              <div className="auditorium-title-row">
-                {cinemaAuditoriums.length > 1 ? (
-                  <label
-                    className="auditorium-title-switcher"
-                    data-dbd-pattern="auditorium-switcher"
-                  >
-                    <select
-                      aria-label="切换影厅"
-                      value={auditorium.id}
-                      onChange={(event) =>
-                        switchAuditorium(event.target.value)
-                      }
-                    >
-                      {cinemaAuditoriums.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                    <CaretDown
-                      className="auditorium-title-caret"
-                      size={16}
-                      aria-hidden="true"
-                    />
-                  </label>
-                ) : (
-                  <h1>{auditorium.name}</h1>
-                )}
-                <span
-                  className={`seat-layout-source-tag ${
-                    auditorium.seatLayout ? "is-captured" : "is-estimated"
-                  }`}
-                  data-dbd-component="tag"
-                  role="status"
-                >
-                  {auditorium.seatLayout ? "真实座位排列" : "估算座位排列"}
-                </span>
-              </div>
+          {/* Seat Legend */}
+          <div className="flex items-center justify-center gap-6 py-2 text-xs text-slate-400">
+            <div className="flex items-center gap-2">
+              <span className="w-3.5 h-3.5 bg-blue-600 rounded-sm" /> Available
             </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3.5 h-3.5 bg-purple-600 rounded-sm" /> VIP
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-3.5 h-3.5 bg-amber-500 rounded-sm" /> Selected
+            </div>
+          </div>
+        </div>
 
-            <section
-              className="technical-summary"
-              aria-label="影厅技术数据"
-              data-dbd-pattern="technical-summary"
-            >
+        {/* Sidebar Info & Checkout */}
+        <div className="space-y-6">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
+            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+              <Ticket className="w-5 h-5 text-amber-500" />
+              Reservation Details
+            </h3>
+
+            {/* Movie Card */}
+            <div className="flex gap-4 items-center bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <Image
+                src={auditorium.moviePoster}
+                alt={auditorium.movieTitle}
+                width={64}
+                height={80}
+                referrerPolicy="no-referrer"
+                className="w-16 h-20 object-cover rounded-md"
+              />
               <div>
-                <span className="technical-label-stack">
-                  <span>银幕数据</span>
-                  {auditorium.screenDataAudit ? (
-                    <span
-                      className={`screen-data-confidence is-${auditorium.screenDataAudit.status}`}
-                      title={auditorium.screenDataAudit.note}
-                      aria-label={`银幕数据可信度：${auditorium.screenDataAudit.label}。${auditorium.screenDataAudit.note}`}
-                    >
-                      {auditorium.screenDataAudit.label}
+                <h4 className="font-semibold text-white text-sm">{auditorium.movieTitle}</h4>
+                <p className="text-xs text-slate-400 mt-1">{auditorium.screenSize}</p>
+                <div className="flex gap-1.5 mt-2">
+                  {auditorium.showtimes.map((st) => (
+                    <span key={st} className="bg-slate-800 text-slate-300 text-[10px] px-2 py-0.5 rounded">
+                      {st}
                     </span>
-                  ) : null}
-                </span>
-                <strong>
-                  {auditorium.screenWidth.toFixed(1)} ×{" "}
-                  {auditorium.screenHeight.toFixed(1)} m
-                </strong>
-                <small>
-                  {(auditorium.screenWidth * auditorium.screenHeight).toFixed(0)}
-                  ㎡ · {auditorium.screenAspect}
-                </small>
+                  ))}
+                </div>
               </div>
-              <div>
-                <span>放映技术</span>
-                <strong>{auditorium.projectionTechnology}</strong>
-                <small>{auditorium.projectionDetails.join(" / ")}</small>
-              </div>
-              <div className="screen-surface-spec">
-                <span>幕面光学模型</span>
-                <strong>{auditorium.screenSurface.name}</strong>
-                <small>
-                  增益 {auditorium.screenSurface.gain.toFixed(1)} / 半增益角{" "}
-                  {auditorium.screenSurface.halfGainAngle}° / 数字微孔{" "}
-                  {auditorium.screenSurface.perforationMm.toFixed(1)} mm
-                </small>
-              </div>
-            </section>
             </div>
 
-            <div
-              className="panel-seat-content"
-              id="mobile-seat-panel"
-              role={isMobile ? "tabpanel" : undefined}
-              hidden={isMobile && mobilePanelTab !== "seats"}
-            >
-            <div className="screen-key">
-              <span>银幕</span>
-              <small>{auditorium.screenAspect}</small>
-            </div>
-
-            <div
-              ref={seatMapRef}
-              className={[
-                "seat-map",
-                auditorium.rowCount >= 19
-                  ? "is-ultra-dense"
-                  : auditorium.rowCount >= 15
-                    ? "is-dense"
-                    : "",
-              ]
-                .filter(Boolean)
-                .join(" ")}
-              role="group"
-              aria-label="座位图"
-            >
-              {Array.from({ length: auditorium.rowCount }, (_, row) => {
-                const rowSeats = seats.filter((seat) => seat.row === row);
-                return (
-                  <div className="seat-row" key={row}>
-                    <span className="row-label">{rowSeats[0]?.rowLabel}</span>
-                    <div
-                      className={`seat-row-buttons ${
-                        auditorium.seatLayout ? "has-captured-layout" : ""
-                      }`}
-                      style={
-                        auditorium.seatLayout
-                          ? ({
-                              gridTemplateColumns: `repeat(${auditorium.seatLayout.gridColumns}, 9px)`,
-                              minWidth: `${
-                                auditorium.seatLayout.gridColumns * 12
-                              }px`,
-                            } satisfies CSSProperties)
-                          : undefined
-                      }
+            {/* Selected Seats summary */}
+            <div className="space-y-2">
+              <label className="text-xs text-slate-400 font-medium">Selected Seats ({selectedSeats.length})</label>
+              <div className="flex flex-wrap gap-1.5 min-h-[40px] p-2 bg-slate-950 rounded-lg border border-slate-800">
+                {selectedSeats.length > 0 ? (
+                  selectedSeats.map((seat) => (
+                    <span
+                      key={seat}
+                      className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs px-2 py-0.5 rounded"
                     >
-                      {rowSeats.map((seat, index) => (
-                        <button
-                          type="button"
-                          key={seat.id}
-                          className={[
-                            "seat-button",
-                            seat.id === selectedSeat.id ? "is-selected" : "",
-                            seat.status === "occupied" ? "is-occupied" : "",
-                            !auditorium.seatLayout &&
-                            index === rowSeats.length / 2
-                              ? "after-aisle"
-                              : "",
-                          ]
-                            .filter(Boolean)
-                            .join(" ")}
-                          style={
-                            auditorium.seatLayout
-                              ? { gridColumn: seat.gridSlot }
-                              : undefined
-                          }
-                          onClick={() => selectSeat(seat)}
-                          disabled={seat.status === "occupied"}
-                          aria-label={`${seat.rowLabel} 排 ${seat.number} 座${
-                            seat.status === "occupied" ? "，不可选" : ""
-                          }`}
-                          aria-pressed={seat.id === selectedSeat.id}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="seat-legend" aria-label="图例">
-              <span>
-                <i className="legend-available" /> 可选
-              </span>
-              <span>
-                <i className="legend-selected" /> 当前
-              </span>
-              <span>
-                <i className="legend-occupied" /> 不可选
-              </span>
-            </div>
-
-            <section
-              className="seat-reading"
-              data-dbd-pattern="seat-metrics"
-            >
-              <div className="reading-title">
-                <span>
-                  {selectedSeat.rowLabel} 排 {selectedSeat.number} 座
-                </span>
-                <strong>{metrics.verdict}</strong>
+                      {seat}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-xs text-slate-600 self-center px-1">
+                    Click seats in 3D view to select...
+                  </span>
+                )}
               </div>
-              <dl>
-                <div>
-                  <dt>水平视角</dt>
-                  <dd>{metrics.horizontalFov.toFixed(0)}°</dd>
-                </div>
-                <div>
-                  <dt>仰角</dt>
-                  <dd>{metrics.verticalAngle.toFixed(0)}°</dd>
-                </div>
-                <div>
-                  <dt>距银幕</dt>
-                  <dd>{metrics.distance.toFixed(1)} m</dd>
-                </div>
-              </dl>
-            </section>
             </div>
 
-            <p
-              className="data-note panel-info-note"
-              hidden={isMobile && mobilePanelTab !== "info"}
-              title={`模型说明：${auditorium.sourceNote}。指标为几何估算。`}
-            >
-              模型说明：{auditorium.sourceNote}。指标为几何估算。
-            </p>
+            {/* Pricing */}
+            <div className="border-t border-slate-800 pt-4 space-y-2 text-sm">
+              <div className="flex justify-between text-slate-400">
+                <span>Tickets ({selectedSeats.length} × $15)</span>
+                <span>${calculateTotal()}</span>
+              </div>
+              <div className="flex justify-between text-slate-400">
+                <span>Booking Fee</span>
+                <span>$0.00</span>
+              </div>
+              <div className="flex justify-between text-white font-semibold text-base pt-2 border-t border-slate-800/60">
+                <span>Total Amount</span>
+                <span className="text-amber-400">${calculateTotal()}</span>
+              </div>
+            </div>
+
+            {/* Action Button */}
+            {!isBooked ? (
+              <button
+                onClick={handleBooking}
+                disabled={selectedSeats.length === 0}
+                className="w-full bg-amber-500 hover:bg-amber-400 disabled:opacity-50 disabled:hover:bg-amber-500 text-slate-950 font-semibold py-3 px-4 rounded-lg transition-all shadow-lg shadow-amber-500/10 flex items-center justify-center gap-2"
+              >
+                <Sparkles className="w-4 h-4" />
+                Confirm Booking
+              </button>
+            ) : (
+              <div className="bg-emerald-950/60 border border-emerald-500/30 p-4 rounded-lg text-center space-y-2">
+                <CheckCircle className="w-8 h-8 text-emerald-400 mx-auto" />
+                <p className="text-emerald-300 font-medium text-sm">Booking Confirmed!</p>
+                <p className="text-xs text-emerald-400/70">
+                  Your tickets for {selectedSeats.join(", ")} have been reserved.
+                </p>
+              </div>
+            )}
           </div>
-        </aside>
-      </section>
-    </main>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const isGithubActions = process.env.GITHUB_ACTIONS === "true" || Boolean(process.env.GITHUB_ACTIONS);
+
 let repo = "";
 if (isGithubActions && process.env.GITHUB_REPOSITORY) {
   const repoName = process.env.GITHUB_REPOSITORY.split("/")[1];
