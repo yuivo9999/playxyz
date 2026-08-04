@@ -122,12 +122,12 @@ function CinemaRow({
           event.preventDefault();
           return;
         }
+        setIsEntering(true);
         window.sessionStorage.setItem(
           listScrollStorageKey,
           String(window.scrollY),
         );
       }}
-      onNavigate={() => setIsEntering(true)}
     >
       <div className="cinema-result-main">
         <div className="cinema-result-heading">
