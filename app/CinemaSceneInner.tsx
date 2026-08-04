@@ -2,9 +2,7 @@
 
 import { useRef, useState, useEffect } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei/core/OrbitControls.js";
-import { Text } from "@react-three/drei/core/Text.js";
-import { Float } from "@react-three/drei/core/Float.js";
+import { OrbitControls, Text, Float } from "@react-three/drei";
 import * as THREE from "three";
 import { Auditorium } from "./cinema-data";
 import { Sun, Moon } from "lucide-react";
