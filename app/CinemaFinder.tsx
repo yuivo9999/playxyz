@@ -25,6 +25,7 @@ import {
   matchesPinyinSearch,
   normalizeSearchValue,
 } from "./search-utils.mjs";
+import { DataSourceAttribution } from "./data-source";
 
 type FormatFilter = "all" | PremiumFormat;
 type SortMode = "screen" | "distance";
@@ -122,12 +123,12 @@ function CinemaRow({
           event.preventDefault();
           return;
         }
-        setIsEntering(true);
         window.sessionStorage.setItem(
           listScrollStorageKey,
           String(window.scrollY),
         );
       }}
+      onNavigate={() => setIsEntering(true)}
     >
       <div className="cinema-result-main">
         <div className="cinema-result-heading">
@@ -529,6 +530,8 @@ export function CinemaFinder() {
             ) : null}
           </div>
         </div>
+
+        <DataSourceAttribution />
 
         <div className="cinema-results">
           {results.length ? (

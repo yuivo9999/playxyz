@@ -1,11 +1,13 @@
+import { notFound } from "next/navigation";
 import { CinemaExperience } from "../../CinemaExperience";
 import { auditoriums, getAuditoriumById } from "../../cinema-data";
-import { inventoryHalls } from "../../cinema-inventory";
+
+export const dynamicParams = false;
 
 export function generateStaticParams() {
-  const customIds = auditoriums.map((aud) => ({ auditoriumId: aud.id }));
-  const inventoryIds = inventoryHalls.map((hall) => ({ auditoriumId: hall.id }));
-  return [...customIds, ...inventoryIds];
+  return auditoriums.map((auditorium) => ({
+    auditoriumId: auditorium.id,
+  }));
 }
 
 export default async function CinemaPage({
@@ -14,7 +16,9 @@ export default async function CinemaPage({
   params: Promise<{ auditoriumId: string }>;
 }) {
   const { auditoriumId } = await params;
-  const auditorium = getAuditoriumById(auditoriumId) || auditoriums[0];
+  const auditorium = getAuditoriumById(auditoriumId);
+
+  if (!auditorium) notFound();
 
   return <CinemaExperience initialAuditoriumId={auditorium.id} />;
 }
