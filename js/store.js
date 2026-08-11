@@ -340,3 +340,40 @@ export async function clearAll() {
     await promisifyReq(t.objectStore("conv_index").clear());
   });
 }
+
+// ============================================================
+// 阅后即焚：整库清除（删除数据库后重建基础表）
+// ============================================================
+// purgeAll(): 页面启动 / 手动清空时调用：删库 → 重建 meta / conv_index → 保证库干净可用
+// purgeNow(): 页面关闭前 fire-and-forget：只删不重建（页面都要没了，没必要重建）
+function deleteDB() {
+  return new Promise((resolve) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    // 兜底：多标签页时可能被 onblocked 阻塞，3 秒后放弃，交给下次打开时清理
+    const timer = setTimeout(resolve, 3000);
+    req.onsuccess = () => { clearTimeout(timer); resolve(); };
+    req.onerror = () => { clearTimeout(timer); resolve(); };
+    req.onblocked = () => { /* 等超时兜底 */ };
+  });
+}
+
+export function purgeAll() {
+  return enqueue(async () => {
+    // 1) 关掉当前连接（否则 deleteDatabase 会一直阻塞）
+    if (_dbPromise) {
+      try { (await _dbPromise).close(); } catch (e) {}
+    }
+    _dbPromise = null;
+    _pendingUpgrade = null;
+    // 2) 删库
+    await deleteDB();
+    // 3) 重新 open，onupgradeneeded 会自动重建 meta / conv_index
+    _dbPromise = openDBWithPlan(DB_VERSION, null);
+    await _dbPromise;
+  });
+}
+
+// 页面关闭前调用：直接删库，不重建（fire-and-forget）
+export function purgeNow() {
+  try { indexedDB.deleteDatabase(DB_NAME); } catch (e) { /* 忽略 */ }
+}
