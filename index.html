@@ -9,79 +9,22 @@
 </head>
 <body>
 
-<!-- 顶栏 -->
+<!-- 顶栏：🗑 清空并新对话 | 标题 | ⚙ 生成索引 -->
 <header class="topbar">
-  <button id="menuBtn" class="icon-btn" title="设置" aria-label="设置">☰</button>
+  <button id="clearConvBtn" class="icon-btn" title="清空并开启新对话（阅后即焚）" aria-label="清空并新对话">🗑</button>
   <div id="convTitle" class="topbar-title">新对话</div>
-  <button id="assetBtn" class="icon-btn" title="资产库" aria-label="资产库">📚</button>
-  <button id="indexerBtn" class="icon-btn" title="生成索引（VCPBookIndexGen）" aria-label="生成索引">⚙</button>
-  <button id="newConvBtn" class="icon-btn" title="新对话" aria-label="新对话">＋</button>
+  <button id="indexerBtn" class="icon-btn" title="分析概括小说（生成索引）" aria-label="生成索引">⚙</button>
 </header>
-
-<!-- 设置抽屉（左侧滑出） -->
-<aside id="drawer" class="drawer">
-  <div class="drawer-mask" data-close-drawer></div>
-  <div class="drawer-panel">
-    <div class="drawer-head">
-      <strong>设置</strong>
-      <button class="icon-btn" data-close-drawer>✕</button>
-    </div>
-    <div class="drawer-section">
-      <div class="drawer-h">对话</div>
-      <div id="historyList" class="history-list"></div>
-    </div>
-    <div class="drawer-section">
-      <div class="drawer-h">数据</div>
-      <div class="row">
-        <button id="exportJsonBtn" class="btn-mini">导出 JSON</button>
-        <button id="importJsonBtn" class="btn-mini">导入 JSON</button>
-      </div>
-      <div class="row" style="margin-top:6px">
-        <button id="clearAllBtn" class="btn-mini danger">清空全部</button>
-      </div>
-    </div>
-    <div class="drawer-section">
-      <div class="drawer-h">默认参数</div>
-      <div class="form-grid">
-        <label>切块大小（字符）<input id="chunkSize" type="number" value="1500"></label>
-        <label>并发数（speed 模式）<input id="maxConcurrency" type="number" value="3"></label>
-        <label>自定义章节正则<input id="splitPattern" placeholder="留空用默认"></label>
-      </div>
-      <button id="saveDefaultsBtn" class="btn-mini" style="margin-top:6px">保存默认值</button>
-    </div>
-  </div>
-</aside>
-
-<!-- 资产库（右侧滑出） -->
-<aside id="assetDrawer" class="drawer drawer-right">
-  <div class="drawer-mask" data-close-asset></div>
-  <div class="drawer-panel">
-    <div class="drawer-head">
-      <strong>资产库</strong>
-      <button class="icon-btn" data-close-asset>✕</button>
-    </div>
-    <div id="assetDropZone" class="drop-zone mini">
-      <p>拖拽 TXT / MD 到这里</p>
-      <p class="muted small">或 <label for="fileInput" id="pickFileLabel" class="btn-mini" style="cursor:pointer;display:inline-block">选择文件</label></p>
-      <input type="file" id="fileInput" accept=".txt,.md,text/plain,text/*" multiple style="position:absolute;width:0;height:0;opacity:0;overflow:hidden">
-    </div>
-    <div class="row" style="margin:8px 0">
-      <button id="mergeBookBtn" class="btn-mini">合并勾选 TXT 为一本书</button>
-    </div>
-    <div id="assetList" class="asset-list"></div>
-  </div>
-</aside>
 
 <!-- 主内容：聊天区 -->
 <main class="chat-main">
   <div id="chatMsgs" class="chat-msgs">
-    <div class="empty-hint">开始对话吧。<br>点击左下角 <strong>＋</strong> 上传小说作为上下文。</div>
+    <div class="empty-hint">开始对话吧。<br>点击底部 <strong>＋</strong> 上传小说 TXT，AI 即可阅读并回答你的问题。<br><span class="muted small">🔥 阅后即焚：关闭本页后数据自动清除</span></div>
   </div>
 </main>
 
 <!-- 底部输入区 -->
 <footer class="chat-foot">
-  <button id="uploadBtn" class="foot-icon" title="添加小说">＋</button>
   <button id="modelBtn" class="model-pill" title="切换模型">
     <span id="modelLabel">添加模型</span>
     <span class="caret">▾</span>
@@ -89,9 +32,13 @@
   <div class="foot-input-wrap">
     <textarea id="chatInput" rows="1" placeholder="发消息…"></textarea>
   </div>
+  <button id="uploadBtn" class="foot-icon" title="上传小说 TXT">＋</button>
   <button id="sendBtn" class="foot-send" title="发送">发送</button>
   <button id="abortBtn" class="foot-abort" style="display:none" title="中止">■</button>
 </footer>
+
+<!-- 隐藏的文件选择框（由底部 ＋ 触发） -->
+<input type="file" id="fileInput" accept=".txt,.md,text/plain,text/*" multiple style="position:absolute;width:0;height:0;opacity:0;overflow:hidden">
 
 <!-- 模型选择下拉 -->
 <div id="modelMenu" class="model-menu" style="display:none">
@@ -126,15 +73,11 @@
       </div>
 
       <div class="form-grid">
-        <label>别名<input id="apiAlias" placeholder="自动生成：nvidia-<模型名>"></label>
-        <label>Base URL<input id="apiBaseUrl" placeholder="https://integrate.api.nvidia.com/v1"></label>
+        <label>名称（别名）<input id="apiAlias" placeholder="如 my-nvidia-model"></label>
+        <label>URL<input id="apiBaseUrl" placeholder="https://integrate.api.nvidia.com/v1"></label>
         <label>API Key<input id="apiKey" type="password" placeholder="nvapi-..."></label>
-        <label>Model<input id="apiModel" placeholder="google/gemma-4-31b-it"></label>
-        <label>CORS 代理（手机端必填）<input id="apiProxy" placeholder="https://corsproxy.io/?"></label>
+        <label>Model（必填，如 google/gemma-4-31b-it）<input id="apiModel" placeholder="google/gemma-4-31b-it"></label>
       </div>
-      <p class="muted small" style="margin-top:6px;background:#fff3cd;padding:6px 8px;border-radius:4px;line-height:1.5">
-        📱 <strong>手机端提示：</strong>浏览器直连 API 会被 CORS 拦截，必须填写代理地址。<br>推荐使用 <code>https://corsproxy.io/?</code>（免费，无需注册）。
-      </p>
       <div class="row" style="margin-top:8px">
         <button id="saveModelBtn" class="btn-mini">保存</button>
         <button id="delModelBtn" class="btn-mini danger" style="display:none">删除此模型</button>
@@ -144,25 +87,11 @@
   </div>
 </div>
 
-<!-- 资产查看 Modal -->
-<div id="viewerModal" class="modal">
-  <div class="modal-card large">
-    <div class="modal-head">
-      <div>
-        <div id="viewerTitle" class="modal-title">查看</div>
-        <div id="viewerMeta" class="muted small"></div>
-      </div>
-      <button class="icon-btn" data-close="viewerModal">✕</button>
-    </div>
-    <pre id="viewerBody" class="modal-body scroll"></pre>
-  </div>
-</div>
-
-<!-- 索引面板 Modal（隐藏的二级页：合并 + 选模式 + 开始） -->
+<!-- 索引面板 Modal（选书 + 模式 + 开始） -->
 <div id="indexerModal" class="modal">
   <div class="modal-card">
     <div class="modal-head">
-      <div class="modal-title">⚙ VCPBookIndexGen</div>
+      <div class="modal-title">⚙ 分析概括小说</div>
       <button class="icon-btn" data-close="indexerModal">✕</button>
     </div>
     <div class="modal-body">
