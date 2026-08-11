@@ -106,6 +106,47 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
   box-shadow: none;
 }
 
+/* ===== 消息行：气泡 + 复制按钮 + 等待计时 ===== */
+.msg-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 6px;
+  margin: 2px 0;
+}
+.msg-row.user { justify-content: flex-end; }
+.msg-row.assistant { justify-content: flex-start; }
+.msg-row.system { justify-content: center; }
+/* 用户行：气泡靠右，复制按钮在气泡左侧 */
+.msg-row.user .msg { order: 2; }
+.msg-row.user .copy-btn { order: 1; }
+/* AI 行：气泡靠左，复制按钮在气泡右侧 */
+.msg-row.assistant .msg { order: 1; }
+.msg-row.assistant .copy-btn { order: 2; }
+/* 等待计时：独占一行，显示在 AI 气泡上方 */
+.msg-timer {
+  flex-basis: 100%;
+  order: -1;
+  font-size: 11px;
+  color: #8a9199;
+  line-height: 1.4;
+  margin: 0;
+}
+.copy-btn {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  border: 1px solid #e0e3e7;
+  background: #fff;
+  color: #8a9199;
+  font-size: 12px;
+  line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+}
+.copy-btn:active { background: #eef1f4; color: #2f7cf6; }
+.copy-btn.done { color: #1f7a3a; border-color: #b7e0c2; background: #f0faf3; }
+
 /* ===== 底部输入条 ===== */
 .chat-foot {
   flex: 0 0 auto;
