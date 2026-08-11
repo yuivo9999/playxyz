@@ -9,7 +9,9 @@
 // - 升级版本时由 ensureConvStore / deleteConvStore 动态告知 onupgradeneeded 要做什么
 
 const DB_NAME = "web_novel_reader";
-const DB_VERSION = 1;
+// ⚠️ 永远只增不减！浏览器里残留了 version=2 的旧库（v1+ 动态升级）
+// 我们升到 3 拿到 onupgradeneeded 控制权，在里面清掉所有孤儿 store
+const DB_VERSION = 3;
 
 let _dbPromise = null;        // 单例 IDBDatabase
 let _queueTail = Promise.resolve();
@@ -28,29 +30,37 @@ function openDBWithPlan(version, plan) {
     const req = indexedDB.open(DB_NAME, version);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
+      // 基础 store 必建
       if (!db.objectStoreNames.contains("meta")) {
         db.createObjectStore("meta", { keyPath: "key" });
       }
       if (!db.objectStoreNames.contains("conv_index")) {
         db.createObjectStore("conv_index", { keyPath: "id" });
       }
+      // 清理旧的孤儿动态 store（除保留的固定 store 外，凡是形如 conv_xxx 的都删）
+      // 之所以这样做：v2 时代代码会在运行中动态建 conv_xxx，
+      // 但现在改用单对象库存全部资产，那些 conv_xxx 全部作废
+      const keep = new Set(["meta", "conv_index"]);
+      const orphanStores = Array.from(db.objectStoreNames).filter(n => !keep.has(n));
+      for (const sid of orphanStores) {
+        try { db.deleteObjectStore(sid); } catch (err) { /* 忽略 */ }
+      }
       if (plan && plan.toCreate) {
         for (const sid of plan.toCreate) {
           if (!db.objectStoreNames.contains(sid)) {
-            db.createObjectStore(sid, { keyPath: "id" });
+            try { db.createObjectStore(sid, { keyPath: "id" }); } catch (err) {}
           }
         }
       }
       if (plan && plan.toDelete) {
         for (const sid of plan.toDelete) {
           if (db.objectStoreNames.contains(sid)) {
-            db.deleteObjectStore(sid);
+            try { db.deleteObjectStore(sid); } catch (err) {}
           }
         }
       }
     };
     req.onsuccess = () => {
-      // 升级完成后清理 pendingUpgrade
       if (_pendingUpgrade && _pendingUpgrade.ver <= version) {
         _pendingUpgrade = null;
       }
