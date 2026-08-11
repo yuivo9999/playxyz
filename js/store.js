@@ -2,46 +2,99 @@
 // IndexedDB 封装：每个 conv_id 一个对象库
 // 库内记录：{ id, type, name, content, ...meta, createdAt }
 // 资产类型：txt / book / index-book / index-chapter / index-chunk / chat
+//
+// 关键设计：
+// - 单例 db handle（页面生命周期内复用，避免反复 open/close）
+// - 串行化队列（enqueue）：避免并发 transaction
+// - 升级版本时由 ensureConvStore / deleteConvStore 动态告知 onupgradeneeded 要做什么
 
 const DB_NAME = "web_novel_reader";
 const DB_VERSION = 1;
 
-function openDB() {
+let _dbPromise = null;        // 单例 IDBDatabase
+let _queueTail = Promise.resolve();
+let _pendingUpgrade = null;   // { ver, toCreate: Set, toDelete: Set }
+
+// ---------- 串行化 ----------
+function enqueue(fn) {
+  const job = _queueTail.then(fn, fn);
+  _queueTail = job.catch(() => {});
+  return job;
+}
+
+// ---------- DB 开关（带升级） ----------
+function openDBWithPlan(version, plan) {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    const req = indexedDB.open(DB_NAME, version);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains("meta")) {
         db.createObjectStore("meta", { keyPath: "key" });
       }
-      // conv_index 存所有对话的元数据 + 容量估算
       if (!db.objectStoreNames.contains("conv_index")) {
         db.createObjectStore("conv_index", { keyPath: "id" });
       }
+      if (plan && plan.toCreate) {
+        for (const sid of plan.toCreate) {
+          if (!db.objectStoreNames.contains(sid)) {
+            db.createObjectStore(sid, { keyPath: "id" });
+          }
+        }
+      }
+      if (plan && plan.toDelete) {
+        for (const sid of plan.toDelete) {
+          if (db.objectStoreNames.contains(sid)) {
+            db.deleteObjectStore(sid);
+          }
+        }
+      }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      // 升级完成后清理 pendingUpgrade
+      if (_pendingUpgrade && _pendingUpgrade.ver <= version) {
+        _pendingUpgrade = null;
+      }
+      resolve(req.result);
+    };
     req.onerror = () => reject(req.error);
+    req.onblocked = () => reject(new Error("IndexedDB 被阻塞，请关闭其他标签页后刷新"));
   });
 }
 
-async function ensureConvStore(db, convId) {
-  if (db.objectStoreNames.contains(convId)) return;
-  // 动态创建对象库
-  await new Promise((resolve, reject) => {
-    const ver = db.version + 1;
-    db.close();
-    const req = indexedDB.open(DB_NAME, ver);
-    req.onupgradeneeded = (e) => {
-      const d = e.target.result;
-      if (!d.objectStoreNames.contains("meta")) d.createObjectStore("meta", { keyPath: "key" });
-      if (!d.objectStoreNames.contains("conv_index")) d.createObjectStore("conv_index", { keyPath: "id" });
-      if (!d.objectStoreNames.contains(convId)) {
-        d.createObjectStore(convId, { keyPath: "id" });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+async function getDB() {
+  if (_dbPromise) return _dbPromise;
+  _dbPromise = openDBWithPlan(DB_VERSION, null).catch(err => {
+    _dbPromise = null;
+    throw err;
   });
+  return _dbPromise;
+}
+
+// 动态为 convId 建 store（必要时升版本）
+async function ensureConvStore(convId) {
+  return enqueue(async () => {
+    let db = await getDB();
+    if (db.objectStoreNames.contains(convId)) return;
+    // 关闭当前连接，升级 + 创建
+    const newVer = db.version + 1;
+    _pendingUpgrade = { ver: newVer, toCreate: new Set([convId]), toDelete: new Set() };
+    db.close();
+    _dbPromise = null;
+    _dbPromise = openDBWithPlan(newVer, _pendingUpgrade);
+    await _dbPromise;
+  });
+}
+
+// 动态删除 convId 对应 store
+async function dropConvStore(convId) {
+  // 需要先在 conv_index 把 convId 删掉，再升版本删 store
+  const db = await getDB();
+  const newVer = db.version + 1;
+  _pendingUpgrade = { ver: newVer, toCreate: new Set(), toDelete: new Set([convId]) };
+  db.close();
+  _dbPromise = null;
+  _dbPromise = openDBWithPlan(newVer, _pendingUpgrade);
+  return _dbPromise;
 }
 
 function tx(db, stores, mode = "readonly") {
@@ -55,75 +108,74 @@ function promisifyReq(req) {
   });
 }
 
-// ---------- conv_index 操作 ----------
+// ============================================================
+// conv_index
+// ============================================================
 
-export async function listConversations() {
-  const db = await openDB();
-  const t = tx(db, ["conv_index"]);
-  const all = await promisifyReq(t.objectStore("conv_index").getAll());
-  db.close();
-  return all.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+export function listConversations() {
+  return enqueue(async () => {
+    const db = await getDB();
+    const t = tx(db, ["conv_index"]);
+    const all = await promisifyReq(t.objectStore("conv_index").getAll());
+    return (all || []).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  });
 }
 
-export async function createConversation(conv) {
-  const db = await openDB();
-  const id = conv.id || ("conv_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8));
-  const now = Date.now();
-  const record = {
-    id,
-    title: conv.title || "新对话",
-    createdAt: now,
-    updatedAt: now,
-    defaultApiAlias: conv.defaultApiAlias || null,
-    skill: conv.skill || "chat",
-    lastSelection: conv.lastSelection || null, // 资产勾选上下文快照
-  };
-  await ensureConvStore(db, id);
-  const t = tx(db, ["conv_index"], "readwrite");
-  await promisifyReq(t.objectStore("conv_index").put(record));
-  db.close();
-  return record;
-}
-
-export async function updateConversation(convId, patch) {
-  const db = await openDB();
-  const t = tx(db, ["conv_index"], "readwrite");
-  const cur = await promisifyReq(t.objectStore("conv_index").get(convId));
-  if (cur) {
-    Object.assign(cur, patch, { updatedAt: Date.now() });
-    await promisifyReq(t.objectStore("conv_index").put(cur));
-  }
-  db.close();
-  return cur;
-}
-
-export async function getConversation(convId) {
-  const db = await openDB();
-  const t = tx(db, ["conv_index"]);
-  const r = await promisifyReq(t.objectStore("conv_index").get(convId));
-  db.close();
-  return r || null;
-}
-
-// 删除整个对话（含其对象库）
-export async function deleteConversation(convId) {
-  const db = await openDB();
-  await ensureConvStore(db, convId);
-  // 先删所有记录
-  const t = tx(db, [convId, "conv_index"], "readwrite");
-  await promisifyReq(t.objectStore(convId).clear());
-  await promisifyReq(t.objectStore("conv_index").delete(convId));
-  // 删对象库
-  await new Promise((resolve, reject) => {
-    const ver = db.version + 1;
-    db.close();
-    const req = indexedDB.open(DB_NAME, ver);
-    req.onupgradeneeded = (e) => {
-      const d = e.target.result;
-      if (d.objectStoreNames.contains(convId)) d.deleteObjectStore(convId);
+export function createConversation(conv) {
+  return enqueue(async () => {
+    const id = conv.id || ("conv_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8));
+    const now = Date.now();
+    const record = {
+      id,
+      title: conv.title || "新对话",
+      createdAt: now,
+      updatedAt: now,
+      defaultApiAlias: conv.defaultApiAlias || null,
+      skill: conv.skill || "chat",
+      lastSelection: conv.lastSelection || null,
     };
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
+    await ensureConvStore(id);
+    const db = await getDB();
+    const t = tx(db, ["conv_index"], "readwrite");
+    await promisifyReq(t.objectStore("conv_index").put(record));
+    return record;
+  });
+}
+
+export function updateConversation(convId, patch) {
+  return enqueue(async () => {
+    const db = await getDB();
+    const t = tx(db, ["conv_index"], "readwrite");
+    const cur = await promisifyReq(t.objectStore("conv_index").get(convId));
+    if (cur) {
+      Object.assign(cur, patch, { updatedAt: Date.now() });
+      await promisifyReq(t.objectStore("conv_index").put(cur));
+    }
+    return cur;
+  });
+}
+
+export function getConversation(convId) {
+  return enqueue(async () => {
+    const db = await getDB();
+    const t = tx(db, ["conv_index"]);
+    const r = await promisifyReq(t.objectStore("conv_index").get(convId));
+    return r || null;
+  });
+}
+
+export function deleteConversation(convId) {
+  return enqueue(async () => {
+    const db = await getDB();
+    // 1) 清空内容 + 从 conv_index 删除
+    const storeNames = [convId, "conv_index"].filter(n => db.objectStoreNames.contains(n));
+    const t = tx(db, storeNames, "readwrite");
+    if (db.objectStoreNames.contains(convId)) {
+      await promisifyReq(t.objectStore(convId).clear());
+    }
+    await promisifyReq(t.objectStore("conv_index").delete(convId));
+    // 2) 升版本删 store
+    await dropConvStore(convId);
   });
 }
 
@@ -133,61 +185,68 @@ export async function deleteConversations(convIds) {
   }
 }
 
-// ---------- 资产操作 ----------
+// ============================================================
+// 资产
+// ============================================================
 
-export async function addAsset(convId, asset) {
-  const db = await openDB();
-  await ensureConvStore(db, convId);
-  const id = asset.id || (asset.type + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8));
-  const record = { id, createdAt: Date.now(), ...asset };
-  const t = tx(db, [convId], "readwrite");
-  await promisifyReq(t.objectStore(convId).put(record));
-  await touchConv(db, convId);
-  db.close();
-  return record;
+export function addAsset(convId, asset) {
+  return enqueue(async () => {
+    await ensureConvStore(convId);
+    const db = await getDB();
+    const id = asset.id || (asset.type + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8));
+    const record = { ...asset, id, createdAt: asset.createdAt || Date.now() };
+    const t = tx(db, [convId], "readwrite");
+    await promisifyReq(t.objectStore(convId).put(record));
+    await touchConv(convId);
+    return record;
+  });
 }
 
-export async function putAsset(convId, asset) {
-  // 强制覆盖（id 存在则更新）
-  const db = await openDB();
-  await ensureConvStore(db, convId);
-  const record = { createdAt: Date.now(), ...asset };
-  const t = tx(db, [convId], "readwrite");
-  await promisifyReq(t.objectStore(convId).put(record));
-  await touchConv(db, convId);
-  db.close();
-  return record;
+export function putAsset(convId, asset) {
+  return enqueue(async () => {
+    await ensureConvStore(convId);
+    const db = await getDB();
+    const record = { ...asset, createdAt: asset.createdAt || Date.now() };
+    const t = tx(db, [convId], "readwrite");
+    await promisifyReq(t.objectStore(convId).put(record));
+    await touchConv(convId);
+    return record;
+  });
 }
 
-export async function listAssets(convId) {
-  const db = await openDB();
-  await ensureConvStore(db, convId);
-  const t = tx(db, [convId]);
-  const all = await promisifyReq(t.objectStore(convId).getAll());
-  db.close();
-  return all;
+export function listAssets(convId) {
+  return enqueue(async () => {
+    await ensureConvStore(convId);
+    const db = await getDB();
+    const t = tx(db, [convId]);
+    const all = await promisifyReq(t.objectStore(convId).getAll());
+    return all || [];
+  });
 }
 
-export async function getAsset(convId, assetId) {
-  const db = await openDB();
-  await ensureConvStore(db, convId);
-  const t = tx(db, [convId]);
-  const r = await promisifyReq(t.objectStore(convId).get(assetId));
-  db.close();
-  return r || null;
+export function getAsset(convId, assetId) {
+  return enqueue(async () => {
+    await ensureConvStore(convId);
+    const db = await getDB();
+    const t = tx(db, [convId]);
+    const r = await promisifyReq(t.objectStore(convId).get(assetId));
+    return r || null;
+  });
 }
 
-export async function deleteAsset(convId, assetId) {
-  const db = await openDB();
-  await ensureConvStore(db, convId);
-  const t = tx(db, [convId], "readwrite");
-  await promisifyReq(t.objectStore(convId).delete(assetId));
-  await touchConv(db, convId);
-  db.close();
+export function deleteAsset(convId, assetId) {
+  return enqueue(async () => {
+    await ensureConvStore(convId);
+    const db = await getDB();
+    const t = tx(db, [convId], "readwrite");
+    await promisifyReq(t.objectStore(convId).delete(assetId));
+    await touchConv(convId);
+  });
 }
 
-async function touchConv(db, convId) {
+async function touchConv(convId) {
   try {
+    const db = await getDB();
     const t = tx(db, ["conv_index"], "readwrite");
     const cur = await promisifyReq(t.objectStore("conv_index").get(convId));
     if (cur) {
@@ -195,11 +254,13 @@ async function touchConv(db, convId) {
       await promisifyReq(t.objectStore("conv_index").put(cur));
     }
   } catch (e) {
-    // conv_index 可能尚未存在（首次写入前），忽略
+    // 静默
   }
 }
 
-// ---------- 容量估算 ----------
+// ============================================================
+// 容量
+// ============================================================
 
 export async function estimateStorage() {
   if (navigator.storage && navigator.storage.estimate) {
@@ -220,9 +281,6 @@ export async function computeConvSize(convId) {
     } else if (a.content) {
       try { bytes += new Blob([JSON.stringify(a.content)]).size; } catch {}
     }
-    if (a.fileIds && Array.isArray(a.fileIds)) {
-      // book 资产引用其他 txt 资产，单独不重复计
-    }
   }
   return { assets, bytes };
 }
@@ -233,4 +291,12 @@ export function formatBytes(n) {
   let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return n.toFixed(n < 10 && i > 0 ? 1 : 0) + " " + u[i];
+}
+
+export async function clearAll() {
+  return enqueue(async () => {
+    const db = await getDB();
+    const t = tx(db, ["conv_index"], "readwrite");
+    await promisifyReq(t.objectStore("conv_index").clear());
+  });
 }
