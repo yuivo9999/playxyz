@@ -14,6 +14,7 @@
   <button id="menuBtn" class="icon-btn" title="设置" aria-label="设置">☰</button>
   <div id="convTitle" class="topbar-title">新对话</div>
   <button id="assetBtn" class="icon-btn" title="资产库" aria-label="资产库">📚</button>
+  <button id="indexerBtn" class="icon-btn" title="生成索引（VCPBookIndexGen）" aria-label="生成索引">⚙</button>
   <button id="newConvBtn" class="icon-btn" title="新对话" aria-label="新对话">＋</button>
 </header>
 
@@ -62,7 +63,7 @@
     <div id="assetDropZone" class="drop-zone mini">
       <p>拖拽 TXT / MD 到这里</p>
       <p class="muted small">或 <button id="pickFileBtn" class="btn-mini">选择文件</button></p>
-      <input type="file" id="fileInput" accept=".txt,.md" multiple hidden>
+      <input type="file" id="fileInput" accept=".txt,.md,text/plain,text/*" multiple style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
     </div>
     <div class="row" style="margin:8px 0">
       <button id="mergeBookBtn" class="btn-mini">合并勾选 TXT 为一本书</button>
