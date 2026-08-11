@@ -276,21 +276,35 @@ function deleteModelFromForm() {
 
 // ============== 上传 ==============
 async function onUploadFiles(fileList) {
-  const files = Array.from(fileList).filter(f => /\.(txt|md)$/i.test(f.name) || f.type.startsWith("text/"));
-  if (files.length === 0) { flash("仅支持 .txt / .md"); return; }
+  console.log("[上传] 收到文件数：", fileList ? fileList.length : 0);
+  if (!fileList || fileList.length === 0) {
+    flash("未选择文件");
+    return;
+  }
+  const files = Array.from(fileList).filter(f => /\.(txt|md)$/i.test(f.name) || f.type.startsWith("text/") || f.type === "");
+  console.log("[上传] 通过过滤后文件数：", files.length, files.map(f => f.name));
+  if (files.length === 0) {
+    flash("仅支持 .txt / .md 文件");
+    return;
+  }
+  let okCount = 0;
   for (const f of files) {
     if (f.size > 100 * 1024 * 1024) { flash(`${f.name} 超过 100MB，跳过`); continue; }
+    if (f.size === 0) { flash(`${f.name} 是空文件`); continue; }
     try {
       const { text, encoding, size, name } = await readTextFromFile(f);
+      if (!text || text.length === 0) { flash(`${f.name} 解析后内容为空（可能编码不支持）`); continue; }
       await Store.addAsset(state.convId, {
-        type: "txt", name, content: text, encoding, size, createdAt: Date.now(),
+        type: "txt", name, content: text, encoding, size, convId: state.convId, createdAt: Date.now(),
       });
+      okCount++;
     } catch (e) {
-      flash("读取失败：" + e.message);
+      console.error("[上传] 失败", f.name, e);
+      flash("读取失败：" + f.name + " " + e.message);
     }
   }
   await renderAssets();
-  flash(`已上传 ${files.length} 个文件`);
+  if (okCount > 0) flash(`已上传 ${okCount} 个文件`);
 }
 
 async function mergeSelectedIntoBook() {
@@ -310,6 +324,16 @@ async function mergeSelectedIntoBook() {
 
 // ============== 聊天发送 ==============
 async function sendChat() {
+  try {
+    return await sendChatInner();
+  } catch (e) {
+    console.error("[sendChat 外层错误]", e);
+    flash("发送失败：" + e.message);
+    setSending(false);
+  }
+}
+
+async function sendChatInner() {
   const input = $("#chatInput");
   const text = input.value.trim();
   if (!text) return;
@@ -323,7 +347,8 @@ async function sendChat() {
   autoResizeInput();
 
   // 用户消息入 DB
-  await Store.addAsset(state.convId, { type: "chat", role: "user", content: text, createdAt: Date.now() });
+  await Store.addAsset(state.convId, { type: "chat", role: "user", content: text, convId: state.convId, createdAt: Date.now() });
+
   // 构造上下文
   const ctx = await buildContext();
   const messages = [];
@@ -333,19 +358,25 @@ async function sendChat() {
   }
   messages.push({ role: "user", content: text });
 
+  // 先渲染一次（看到自己刚发的消息）
+  await renderChat();
+
   // 占位 AI 消息
   const aiId = "chat_" + Date.now() + "_ai";
-  await Store.addAsset(state.convId, { type: "chat", id: aiId, role: "assistant", content: "", createdAt: Date.now() });
+  await Store.addAsset(state.convId, { type: "chat", id: aiId, role: "assistant", content: "", convId: state.convId, createdAt: Date.now() });
   await renderChat();
 
   // 找占位元素
-  const aiRow = [...$$("#chatMsgs .msg.assistant")].pop();
+  const allAssistant = $$("#chatMsgs .msg.assistant");
+  const aiRow = allAssistant[allAssistant.length - 1];
   let acc = "";
 
   state.abortCtrl = new AbortController();
   setSending(true);
 
-  await callLLM(api, messages, {
+  // 关键：callLLM 是 fire-and-forget，必须在回调里 setSending(false)
+  // 不能 await 整个 callLLM，否则 await resolve 后立刻 setSending(false) 掩盖错误
+  callLLM(api, messages, {
     signal: state.abortCtrl.signal,
     onToken: (t) => {
       acc += t;
@@ -355,14 +386,20 @@ async function sendChat() {
     },
     onDone: async () => {
       // 回写最终内容
-      await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, createdAt: Date.now() });
+      try {
+        await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, convId: state.convId, createdAt: Date.now() });
+      } catch (e) { console.error("回写 AI 消息失败", e); }
       setSending(false);
     },
     onError: async (e) => {
-      acc += (acc ? "\n\n" : "") + `[错误] ${e.message}`;
+      console.error("[LLM 错误]", e);
+      acc += (acc ? "\n\n" : "") + `⚠️ 调用失败：${e.message}\n（可能原因：模型 base_url 不可达 / CORS 被拒 / key 错误）`;
       if (aiRow) aiRow.innerHTML = `<div class="msg-role">AI</div>${escapeHtml(acc)}`;
-      await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, createdAt: Date.now() });
+      try {
+        await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, convId: state.convId, createdAt: Date.now() });
+      } catch (e2) { console.error("回写错误消息失败", e2); }
       setSending(false);
+      flash("AI 调用失败");
     },
   });
 }
@@ -536,6 +573,10 @@ export function bindGlobalUI() {
     closeDrawerPanels();
     openDrawer("assetDrawer");
   };
+  $("#indexerBtn").onclick = () => {
+    closeDrawerPanels();
+    openIndexerModal();
+  };
   $("#newConvBtn").onclick = async () => {
     const c = await Store.createConversation({ title: "新对话 " + new Date().toLocaleTimeString() });
     await switchConv(c.id);
@@ -545,10 +586,37 @@ export function bindGlobalUI() {
   document.querySelectorAll("[data-close-drawer]").forEach(el => el.onclick = closeDrawerPanels);
   document.querySelectorAll("[data-close-asset]").forEach(el => el.onclick = closeDrawerPanels);
 
-  // 底部
-  $("#uploadBtn").onclick = () => $("#fileInput").click();
-  $("#pickFileBtn").onclick = () => $("#fileInput").click();
-  $("#fileInput").onchange = (e) => onUploadFiles(e.target.files);
+  // 底部 / 上传
+  // 关键：隐藏的 input 在某些移动浏览器上 click() 无效
+  // 改用临时显示 / focus / click 三步
+  function openFilePicker() {
+    const inp = $("#fileInput");
+    inp.style.left = "0";
+    inp.style.width = "100%";
+    inp.style.height = "100%";
+    inp.style.opacity = "0.01";
+    inp.style.position = "fixed";
+    inp.style.top = "0";
+    inp.style.zIndex = "9999";
+    inp.value = ""; // 重置，否则选同一个文件不触发 change
+    inp.click();
+    // 1 秒后还原
+    setTimeout(() => {
+      inp.style.left = "-9999px";
+      inp.style.width = "1px";
+      inp.style.height = "1px";
+      inp.style.opacity = "0";
+      inp.style.position = "absolute";
+      inp.style.top = "auto";
+      inp.style.zIndex = "auto";
+    }, 1000);
+  }
+  $("#uploadBtn").onclick = openFilePicker;
+  $("#pickFileBtn").onclick = openFilePicker;
+  $("#fileInput").onchange = (e) => {
+    console.log("[fileInput.change] files=", e.target.files ? e.target.files.length : 0);
+    onUploadFiles(e.target.files);
+  };
   $("#assetDropZone").ondragover = (e) => { e.preventDefault(); $("#assetDropZone").classList.add("hover"); };
   $("#assetDropZone").ondragleave = () => $("#assetDropZone").classList.remove("hover");
   $("#assetDropZone").ondrop = (e) => {
@@ -600,16 +668,7 @@ export function bindGlobalUI() {
     flash("已保存默认值");
   };
 
-  // 索引
+  // 索引（顶栏 ⚙ 按钮已经触发 openIndexerModal）
   $("#startIndexBtn").onclick = startIndexing;
   $("#abortIndexBtn").onclick = () => { if (state.abortCtrl) state.abortCtrl.abort(); };
-  // 索引入口：在资产库里加个"开始索引"按钮 — 这里通过长按或点击 book 资产时弹
-  // 简单起见，加在资产库的"合并按钮"旁边
-  // 改为：单独放一个"⚙ 生成索引"按钮到资产库
-  const idxBtn = document.createElement("button");
-  idxBtn.className = "btn-mini";
-  idxBtn.textContent = "⚙ 生成索引";
-  idxBtn.onclick = openIndexerModal;
-  idxBtn.style.marginLeft = "6px";
-  $("#mergeBookBtn").parentElement.appendChild(idxBtn);
 }
