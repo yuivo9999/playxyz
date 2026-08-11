@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网页版超长小说阅读助手</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <button id="menuBtn" class="icon-btn" title="菜单">☰</button>
+  <div class="brand">📖 网页版超长小说阅读助手</div>
+  <div class="topbar-right">
+    <span id="rateStat" class="muted small">令牌桶：—</span>
+    <select id="modelSelect" class="model-select" title="切换模型"></select>
+  </div>
+</header>
+
+<!-- ☰ 抽屉 -->
+<aside id="drawer" class="drawer">
+  <div class="drawer-panel">
+    <div class="drawer-head">
+      <strong>导航</strong>
+      <button id="drawerClose" class="icon-btn">✕</button>
+    </div>
+    <div class="drawer-section">
+      <button id="newConvBtn" class="btn-block">➕ 新建对话</button>
+      <button id="settingsBtn" class="btn-block">⚙ 设置（多 API）</button>
+      <button id="storageBtn" class="btn-block">💾 存储管理</button>
+    </div>
+    <div class="drawer-section">
+      <div class="drawer-h">📜 历史对话</div>
+      <div id="historyList" class="history-list"></div>
+      <div class="drawer-foot">
+        <button id="deleteSelectedConvBtn" class="btn-mini danger">删除勾选</button>
+        <button id="historyBtn" class="btn-mini">关闭</button>
+      </div>
+    </div>
+    <div class="drawer-section">
+      <div class="drawer-h">数据</div>
+      <div class="row">
+        <button id="exportJsonBtn" class="btn-mini">导出全部 JSON</button>
+        <button id="importJsonBtn" class="btn-mini">导入 JSON</button>
+      </div>
+      <div class="row">
+        <button id="clearAllBtn" class="btn-mini danger">清空全部</button>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<main class="main">
+  <!-- 左侧：资产库 -->
+  <section class="left-pane">
+    <div class="pane-head">
+      <strong>📚 资产库</strong>
+      <span id="selectedSummary" class="muted small">（未选）</span>
+    </div>
+
+    <div id="dropZone" class="drop-zone">
+      <p>拖拽 TXT / MD 到这里</p>
+      <p class="muted small">或</p>
+      <input type="file" id="fileInput" accept=".txt,.md" multiple hidden>
+      <button onclick="document.getElementById('fileInput').click()" class="btn-mini">选择文件</button>
+      <p class="muted small">≤100MB / 个，自动识别 UTF-8 / GBK</p>
+    </div>
+
+    <div class="row" style="margin-top:8px">
+      <button id="mergeBookBtn" class="btn-mini">合并勾选 TXT 为一本书</button>
+    </div>
+
+    <div id="assetList" class="asset-list"></div>
+  </section>
+
+  <!-- 右侧：技能区 -->
+  <section class="right-pane">
+    <div class="skill-tabs">
+      <div class="skill-tab active" data-skill="chat">💬 仅对话</div>
+      <div class="skill-tab" data-skill="indexer">⚙️ VCPBookIndexGen</div>
+    </div>
+
+    <!-- 索引面板 -->
+    <div id="indexerPanel" class="panel" style="display:none">
+      <div class="row">
+        <label>选书：<select id="bookSelect"></select></label>
+        <label>模式：
+          <select id="modeSelect">
+            <option value="speed">speed（每章并发，信号量）</option>
+            <option value="deep">deep（串行+滚动记忆）</option>
+          </select>
+        </label>
+        <button id="startIndexBtn" class="btn">▶ 开始生成索引</button>
+        <button id="abortBtn" class="btn-mini danger" style="display:none">中止</button>
+      </div>
+      <div id="progressWrap" class="progress-wrap" style="display:none">
+        <div id="progressText" class="progress-text">—</div>
+        <div class="progress-bar"><div id="progressBar" class="progress-fill"></div></div>
+      </div>
+      <pre id="indexLog" class="log" style="display:none"></pre>
+      <p class="muted small">索引结果将以 <code>index-book / index-chapter / index-chunk</code> 资产形式回写，可勾选后用于「仅对话」上下文。</p>
+    </div>
+
+    <!-- 对话面板 -->
+    <div id="chatPanel" class="panel">
+      <div id="chatMsgs" class="chat-msgs"></div>
+      <div class="chat-input-wrap">
+        <textarea id="chatInput" placeholder="Ctrl/⌘+Enter 发送。勾选左侧资产作为上下文。" rows="3"></textarea>
+        <div class="chat-input-foot">
+          <button id="sendBtn" class="btn">发送</button>
+          <button id="abortBtn" class="btn-mini danger" style="display:none">中止</button>
+          <span class="muted small" id="ctxHint"></span>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- 资产查看 Modal -->
+<div id="viewerModal" class="modal">
+  <div class="modal-card large">
+    <div class="modal-head">
+      <div>
+        <div id="viewerTitle" class="modal-title">查看</div>
+        <div id="viewerMeta" class="muted small"></div>
+      </div>
+      <button class="icon-btn" data-close="viewerModal">✕</button>
+    </div>
+    <pre id="viewerBody" class="modal-body scroll"></pre>
+  </div>
+</div>
+
+<!-- 设置 Modal -->
+<div id="settingsModal" class="modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-title">⚙ 设置</div>
+      <button class="icon-btn" data-close="settingsModal">✕</button>
+    </div>
+    <div class="modal-body scroll">
+      <div class="form-block">
+        <h3>添加 / 修改 API（OpenAI 兼容协议）</h3>
+        <div class="form-grid">
+          <label>别名<input id="apiAlias" placeholder="如 deepseek-official"></label>
+          <label>Base URL<input id="apiBaseUrl" placeholder="https://api.deepseek.com/v1"></label>
+          <label>API Key<input id="apiKey" type="password" placeholder="sk-..."></label>
+          <label>Model<input id="apiModel" placeholder="deepseek-chat"></label>
+        </div>
+        <button id="addApiBtn" class="btn-mini">保存此 API</button>
+        <p class="muted small">⚠️ 密钥以明文存于本浏览器 <code>localStorage</code>。仅建议本机/不公开部署。</p>
+      </div>
+
+      <div class="form-block">
+        <h3>已配置的 API</h3>
+        <div id="apiList"></div>
+      </div>
+
+      <div class="form-block">
+        <h3>默认值</h3>
+        <div class="form-grid">
+          <label>默认 API 别名<input id="defaultApiAlias" placeholder="（可选）"></label>
+          <label>切块大小（字符）<input id="chunkSize" type="number" value="1500"></label>
+          <label>并发数（speed 模式）<input id="maxConcurrency" type="number" value="3"></label>
+          <label>自定义章节正则<input id="splitPattern" placeholder="留空用默认；如 ^第[0-9]+章.*$"></label>
+        </div>
+        <button id="saveDefaultsBtn" class="btn-mini">保存默认值</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 存储管理 Modal -->
+<div id="storageModal" class="modal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <div class="modal-title">💾 存储管理</div>
+      <button class="icon-btn" data-close="storageModal">✕</button>
+    </div>
+    <div class="modal-body scroll">
+      <div class="form-block">
+        <h3>总占用</h3>
+        <div id="storageTotal" class="muted">—</div>
+      </div>
+      <div class="form-block">
+        <h3>对话 / 占用</h3>
+        <div id="storageList"></div>
+        <div class="row" style="margin-top:8px">
+          <button id="delSelectedStorageBtn" class="btn-mini danger">删除勾选对话</button>
+          <button id="exportIndexBtn" class="btn-mini">导出当前对话的索引 (.md)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

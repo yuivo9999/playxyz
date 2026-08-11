@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>页面未找到</title>
+<script>
+  // 计算到项目根的相对路径（兼容子路径部署）
+  var segs = location.pathname.split("/").filter(Boolean);
+  // 假设本 404.html 在 <root>/web_novel_reader/404.html
+  // 跳转到同级 index.html
+  var base = location.pathname.replace(/[^/]*$/, "");
+  // 若 segs 末段是 "web_novel_reader"，base 已经指向正确目录
+  location.replace(base + "index.html");
+</script>
+</head>
+<body>
+<p>页面未找到，正在跳转…</p>
+</body>
+</html>
