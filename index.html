@@ -113,8 +113,11 @@
         <label>Base URL<input id="apiBaseUrl" placeholder="https://api.deepseek.com/v1"></label>
         <label>API Key<input id="apiKey" type="password" placeholder="sk-... 或 nvapi-..."></label>
         <label>Model<input id="apiModel" placeholder="deepseek-chat"></label>
-        <label>CORS 代理（可选）<input id="apiProxy" placeholder="如 https://your-cors-proxy.com/?"></label>
+        <label>CORS 代理（手机端必填）<input id="apiProxy" placeholder="https://corsproxy.io/?"></label>
       </div>
+      <p class="muted small" style="margin-top:6px;background:#fff3cd;padding:6px 8px;border-radius:4px;line-height:1.5">
+        📱 <strong>手机端提示：</strong>浏览器直连 API 会被 CORS 拦截，必须填写代理地址。<br>推荐使用 <code>https://corsproxy.io/?</code>（免费，无需注册）。
+      </p>
       <div class="row" style="margin-top:8px">
         <button id="saveModelBtn" class="btn-mini">保存</button>
         <button id="delModelBtn" class="btn-mini danger" style="display:none">删除此模型</button>
