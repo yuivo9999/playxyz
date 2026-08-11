@@ -62,8 +62,8 @@
     </div>
     <div id="assetDropZone" class="drop-zone mini">
       <p>拖拽 TXT / MD 到这里</p>
-      <p class="muted small">或 <button id="pickFileBtn" class="btn-mini">选择文件</button></p>
-      <input type="file" id="fileInput" accept=".txt,.md,text/plain,text/*" multiple style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+      <p class="muted small">或 <label for="fileInput" id="pickFileLabel" class="btn-mini" style="cursor:pointer;display:inline-block">选择文件</label></p>
+      <input type="file" id="fileInput" accept=".txt,.md,text/plain,text/*" multiple style="position:absolute;width:0;height:0;opacity:0;overflow:hidden">
     </div>
     <div class="row" style="margin:8px 0">
       <button id="mergeBookBtn" class="btn-mini">合并勾选 TXT 为一本书</button>
@@ -111,8 +111,9 @@
       <div class="form-grid">
         <label>别名<input id="apiAlias" placeholder="如 deepseek-official"></label>
         <label>Base URL<input id="apiBaseUrl" placeholder="https://api.deepseek.com/v1"></label>
-        <label>API Key<input id="apiKey" type="password" placeholder="sk-..."></label>
+        <label>API Key<input id="apiKey" type="password" placeholder="sk-... 或 nvapi-..."></label>
         <label>Model<input id="apiModel" placeholder="deepseek-chat"></label>
+        <label>CORS 代理（可选）<input id="apiProxy" placeholder="如 https://your-cors-proxy.com/?"></label>
       </div>
       <div class="row" style="margin-top:8px">
         <button id="saveModelBtn" class="btn-mini">保存</button>
