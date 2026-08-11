@@ -108,11 +108,28 @@
       <button class="icon-btn" data-close="modelModal">✕</button>
     </div>
     <div class="modal-body">
+      <!-- NVIDIA 一键识别（推荐） -->
+      <div class="nvidia-paste">
+        <details>
+          <summary>🚀 从 NVIDIA 网站粘贴代码自动识别（推荐）</summary>
+          <p class="muted small paste-hint">
+            进入 <a href="https://build.nvidia.com/" target="_blank" rel="noopener">build.nvidia.com</a> → 选模型 → <strong>Build</strong> → 切到 <strong>Node</strong> 标签 → 复制全部代码 → 粘贴到下方：
+          </p>
+          <textarea id="nvidiaPaste" rows="6" placeholder="import axios from 'axios';&#10;&#10;const invokeUrl = &quot;https://integrate.api.nvidia.com/v1/chat/completions&quot;;&#10;..."></textarea>
+          <div class="row" style="margin-top:6px;align-items:center">
+            <button id="parseNvidiaBtn" class="btn-mini primary">🔍 自动识别并填入下方</button>
+            <span id="nvidiaParseStatus" class="muted small"></span>
+          </div>
+          <hr class="or-divider">
+          <p class="muted small" style="margin:0 0 4px">或手动填写：</p>
+        </details>
+      </div>
+
       <div class="form-grid">
-        <label>别名<input id="apiAlias" placeholder="如 deepseek-official"></label>
-        <label>Base URL<input id="apiBaseUrl" placeholder="https://api.deepseek.com/v1"></label>
-        <label>API Key<input id="apiKey" type="password" placeholder="sk-... 或 nvapi-..."></label>
-        <label>Model<input id="apiModel" placeholder="deepseek-chat"></label>
+        <label>别名<input id="apiAlias" placeholder="自动生成：nvidia-<模型名>"></label>
+        <label>Base URL<input id="apiBaseUrl" placeholder="https://integrate.api.nvidia.com/v1"></label>
+        <label>API Key<input id="apiKey" type="password" placeholder="nvapi-..."></label>
+        <label>Model<input id="apiModel" placeholder="google/gemma-4-31b-it"></label>
         <label>CORS 代理（手机端必填）<input id="apiProxy" placeholder="https://corsproxy.io/?"></label>
       </div>
       <p class="muted small" style="margin-top:6px;background:#fff3cd;padding:6px 8px;border-radius:4px;line-height:1.5">
