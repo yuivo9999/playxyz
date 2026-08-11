@@ -81,18 +81,22 @@ async function getDB() {
 }
 
 // 动态为 convId 建 store（必要时升版本）
-async function ensureConvStore(convId) {
-  return enqueue(async () => {
-    let db = await getDB();
-    if (db.objectStoreNames.contains(convId)) return;
-    // 关闭当前连接，升级 + 创建
-    const newVer = db.version + 1;
-    _pendingUpgrade = { ver: newVer, toCreate: new Set([convId]), toDelete: new Set() };
-    db.close();
-    _dbPromise = null;
-    _dbPromise = openDBWithPlan(newVer, _pendingUpgrade);
-    await _dbPromise;
-  });
+// ⚠️ 修复：enqueue 内不可再调 enqueue（会环形等待死锁），
+//    所以拆成 ensureConvStoreInner（纯逻辑，内部使用）和 ensureConvStore（enqueue 包装，对外）
+async function ensureConvStoreInner(convId) {
+  let db = await getDB();
+  if (db.objectStoreNames.contains(convId)) return;
+  // 关闭当前连接，升级 + 创建
+  const newVer = db.version + 1;
+  _pendingUpgrade = { ver: newVer, toCreate: new Set([convId]), toDelete: new Set() };
+  db.close();
+  _dbPromise = null;
+  _dbPromise = openDBWithPlan(newVer, _pendingUpgrade);
+  await _dbPromise;
+}
+
+function ensureConvStore(convId) {
+  return enqueue(() => ensureConvStoreInner(convId));
 }
 
 // 动态删除 convId 对应 store
@@ -144,7 +148,7 @@ export function createConversation(conv) {
       skill: conv.skill || "chat",
       lastSelection: conv.lastSelection || null,
     };
-    await ensureConvStore(id);
+    await ensureConvStoreInner(id);
     const db = await getDB();
     const t = tx(db, ["conv_index"], "readwrite");
     await promisifyReq(t.objectStore("conv_index").put(record));
@@ -201,7 +205,7 @@ export async function deleteConversations(convIds) {
 
 export function addAsset(convId, asset) {
   return enqueue(async () => {
-    await ensureConvStore(convId);
+    await ensureConvStoreInner(convId);
     const db = await getDB();
     const id = asset.id || (asset.type + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8));
     // 预计算 contentLength，避免后续 render 时重复 new Blob()
@@ -216,7 +220,7 @@ export function addAsset(convId, asset) {
 
 export function putAsset(convId, asset) {
   return enqueue(async () => {
-    await ensureConvStore(convId);
+    await ensureConvStoreInner(convId);
     const db = await getDB();
     const cl = typeof asset.content === "string" ? asset.content.length : 0;
     const record = { ...asset, contentLength: cl, createdAt: asset.createdAt || Date.now() };
@@ -230,7 +234,7 @@ export function putAsset(convId, asset) {
 // 手机端优化：只返回元数据，不加载 content 字段（避免一次性加载几百万字到内存）
 export function listAssetMetas(convId) {
   return enqueue(async () => {
-    await ensureConvStore(convId);
+    await ensureConvStoreInner(convId);
     const db = await getDB();
     const t = tx(db, [convId]);
     const store = t.objectStore(convId);
@@ -261,7 +265,7 @@ export function listAssetMetas(convId) {
 // 完整加载（含 content）—— 仅在需要查看内容时调用
 export function listAssets(convId) {
   return enqueue(async () => {
-    await ensureConvStore(convId);
+    await ensureConvStoreInner(convId);
     const db = await getDB();
     const t = tx(db, [convId]);
     const all = await promisifyReq(t.objectStore(convId).getAll());
@@ -271,7 +275,7 @@ export function listAssets(convId) {
 
 export function getAsset(convId, assetId) {
   return enqueue(async () => {
-    await ensureConvStore(convId);
+    await ensureConvStoreInner(convId);
     const db = await getDB();
     const t = tx(db, [convId]);
     const r = await promisifyReq(t.objectStore(convId).get(assetId));
@@ -281,7 +285,7 @@ export function getAsset(convId, assetId) {
 
 export function deleteAsset(convId, assetId) {
   return enqueue(async () => {
-    await ensureConvStore(convId);
+    await ensureConvStoreInner(convId);
     const db = await getDB();
     const t = tx(db, [convId], "readwrite");
     await promisifyReq(t.objectStore(convId).delete(assetId));

@@ -60,13 +60,89 @@ async function renderChat() {
   }
   for (const m of chatMetas) {
     const full = await Store.getAsset(state.convId, m.id);
-    const div = document.createElement("div");
-    div.className = "msg " + (full ? full.role : "system");
-    // 微信风格：纯气泡，无角色文字标签（位置本身已区分左右）
-    div.innerHTML = escapeHtml(full ? full.content || "" : "");
-    wrap.appendChild(div);
+    const content = full ? full.content || "" : "";
+    const role = full ? full.role : "system";
+    const row = document.createElement("div");
+    row.className = "msg-row " + role;
+    if (role === "assistant" && !content) {
+      // AI 等待回复中：上方计时框 + 占位气泡（复制按钮等有内容了再显示）
+      row.classList.add("pending");
+      row.innerHTML = `
+        <div class="msg-timer">⏱ 等待回复…</div>
+        <div class="msg assistant">…</div>
+      `;
+    } else {
+      const parts = [];
+      // AI 已完成的消息：显示历史用时（来自 DB 的 duration 字段）
+      if (role === "assistant" && full && full.duration) {
+        parts.push(`<div class="msg-timer">⏱ 回复用时 ${escapeHtml(String(full.duration))}s</div>`);
+      }
+      parts.push(`<div class="msg ${role}">${escapeHtml(content)}</div>`);
+      if (role === "user" || role === "assistant") {
+        parts.push(`<button class="copy-btn" title="复制这条消息">⧉</button>`);
+      }
+      row.innerHTML = parts.join("");
+    }
+    wrap.appendChild(row);
   }
+  // 复制按钮：点击复制气泡内容
+  wrap.querySelectorAll(".copy-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const bubble = btn.closest(".msg-row").querySelector(".msg");
+      if (!bubble) return;
+      await copyText(bubble.textContent);
+      btn.textContent = "✓";
+      btn.classList.add("done");
+      setTimeout(() => { btn.textContent = "⧉"; btn.classList.remove("done"); }, 1200);
+    };
+  });
   wrap.scrollTop = wrap.scrollHeight;
+}
+
+// ============== 复制 / 计时 ==============
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (e) {
+    // 降级：旧方案（iframe/textarea + execCommand）
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.cssText = "position:fixed;top:-999px;left:-999px;opacity:0";
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      return true;
+    } catch (e2) { return false; }
+  }
+}
+
+let _pendingTimer = null;   // 等待计时的 setInterval id
+let _pendingStart = 0;      // 开始等待的时间戳
+
+// AI 等待回复期间，每秒刷新最后一个 pending 气泡上方的计时
+function startPendingTimer() {
+  _pendingStart = Date.now();
+  if (_pendingTimer) clearInterval(_pendingTimer);
+  _pendingTimer = setInterval(() => {
+    const els = $$("#chatMsgs .msg-row.assistant.pending .msg-timer");
+    if (els.length === 0) { clearInterval(_pendingTimer); _pendingTimer = null; return; }
+    const secs = Math.round((Date.now() - _pendingStart) / 1000);
+    els[els.length - 1].textContent = `⏱ 等待回复 ${secs}s`;
+  }, 1000);
+}
+
+// 停止计时并写入最终文案（首字用时 / 回复完成 / 失败）
+function stopPendingTimer(finalText) {
+  if (_pendingTimer) { clearInterval(_pendingTimer); _pendingTimer = null; }
+  const rows = $$("#chatMsgs .msg-row.assistant");
+  const row = rows[rows.length - 1];
+  if (!row) return;
+  row.classList.remove("pending");
+  const t = row.querySelector(".msg-timer");
+  if (t) t.textContent = finalText;
 }
 
 // ============== Modal 控制 ==============
@@ -324,13 +400,15 @@ async function sendChatInner() {
   }
   const api = Settings.getApi(state.apiAlias);
   if (!api) { flash("API 配置缺失"); return; }
+  const startTime = Date.now();  // 计时起点
   input.value = "";
   autoResizeInput();
 
-  // 用户消息入 DB
+  // ① 用户消息立即写入并渲染 → 立刻看到自己的发言（不等上下文构建）
   await Store.addAsset(state.convId, { type: "chat", role: "user", content: text, convId: state.convId, createdAt: Date.now() });
+  await renderChat();
 
-  // 构造上下文
+  // ② 构建上下文（用户消息已显示，这里慢一点无感）
   const ctx = await buildContext();
   const messages = [];
   if (ctx.system) messages.push({ role: "system", content: ctx.system });
@@ -339,17 +417,16 @@ async function sendChatInner() {
   }
   messages.push({ role: "user", content: text });
 
-  // 先渲染一次（看到自己刚发的消息）
-  await renderChat();
-
-  // 占位 AI 消息
+  // ③ AI 占位消息 + 等待计时
   const aiId = "chat_" + Date.now() + "_ai";
   await Store.addAsset(state.convId, { type: "chat", id: aiId, role: "assistant", content: "", convId: state.convId, createdAt: Date.now() });
   await renderChat();
+  startPendingTimer();
 
-  const allAssistant = $$("#chatMsgs .msg.assistant");
-  const aiRow = allAssistant[allAssistant.length - 1];
+  const aiBubbles = $$("#chatMsgs .msg-row.assistant .msg");
+  const aiRow = aiBubbles[aiBubbles.length - 1];
   let acc = "";
+  let firstTokenAt = null;
 
   state.abortCtrl = new AbortController();
   setSending(true);
@@ -357,26 +434,37 @@ async function sendChatInner() {
   callLLM(api, messages, {
     signal: state.abortCtrl.signal,
     onToken: (t) => {
+      // 收到第一个字：冻结等待计时，显示「首字用时」
+      if (!firstTokenAt) {
+        firstTokenAt = Date.now();
+        stopPendingTimer(`⏱ 首字用时 ${((firstTokenAt - startTime) / 1000).toFixed(1)}s`);
+      }
       acc += t;
       if (aiRow) aiRow.textContent = acc;
       const w = $("#chatMsgs");
       w.scrollTop = w.scrollHeight;
     },
     onDone: async () => {
+      const dur = ((Date.now() - startTime) / 1000).toFixed(1);
+      stopPendingTimer(`⏱ 回复完成 ${dur}s`);
       try {
-        await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, convId: state.convId, createdAt: Date.now() });
+        await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, duration: dur, convId: state.convId, createdAt: Date.now() });
       } catch (e) { console.error("回写 AI 消息失败", e); }
       setSending(false);
+      // 重建消息列表：AI 消息带上复制按钮 + 「⏱ 回复用时」标签
+      await renderChat();
     },
     onError: async (e) => {
       console.error("[LLM 错误]", e);
+      const dur = ((Date.now() - startTime) / 1000).toFixed(1);
+      stopPendingTimer(`⏱ 调用失败 ${dur}s`);
       const errMsg = e.message || String(e);
       acc += (acc ? "\n\n" : "") + `⚠️ 调用失败：${errMsg}`;
-      if (aiRow) aiRow.textContent = acc;
       try {
-        await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, convId: state.convId, createdAt: Date.now() });
+        await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, duration: dur, convId: state.convId, createdAt: Date.now() });
       } catch (e2) { console.error("回写错误消息失败", e2); }
       setSending(false);
+      await renderChat();
     },
   });
 }
