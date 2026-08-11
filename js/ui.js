@@ -227,6 +227,7 @@ function openModelModal(alias = null) {
   $("#modelModalTitle").textContent = alias ? `编辑模型：${alias}` : "添加模型";
   $("#apiAlias").value = ""; $("#apiBaseUrl").value = "";
   $("#apiKey").value = ""; $("#apiModel").value = "";
+  $("#apiProxy").value = "";
   $("#apiAlias").disabled = !!alias;
   $("#delModelBtn").style.display = alias ? "" : "none";
   $("#delModelBtn").dataset.alias = alias || "";
@@ -237,6 +238,7 @@ function openModelModal(alias = null) {
       $("#apiBaseUrl").value = a.base_url || "";
       $("#apiKey").value = a.api_key || "";
       $("#apiModel").value = a.model || "";
+      $("#apiProxy").value = a.proxy || "";
     }
   }
   closeDrawerPanels();
@@ -248,11 +250,12 @@ function saveModelFromForm() {
   const base_url = $("#apiBaseUrl").value.trim();
   const api_key = $("#apiKey").value.trim();
   const model = $("#apiModel").value.trim();
+  const proxy = $("#apiProxy").value.trim();
   if (!alias || !base_url || !model) {
     flash("请填写别名、Base URL、Model");
     return;
   }
-  const rec = { alias, base_url, api_key, model };
+  const rec = { alias, base_url, api_key, model, proxy };
   Settings.saveApi(rec);
   if (!state.apiAlias) state.apiAlias = alias;
   Settings.saveDefaults({ ...Settings.getDefaults(), defaultApiAlias: state.apiAlias });
@@ -281,22 +284,29 @@ async function onUploadFiles(fileList) {
     flash("未选择文件");
     return;
   }
-  const files = Array.from(fileList).filter(f => /\.(txt|md)$/i.test(f.name) || f.type.startsWith("text/") || f.type === "");
+  const files = Array.from(fileList).filter(f => {
+    const ok = /\.(txt|md)$/i.test(f.name) || f.type.startsWith("text/") || f.type === "";
+    console.log("[上传] 过滤:", f.name, "type=", f.type, "size=", f.size, "ok=", ok);
+    return ok;
+  });
   console.log("[上传] 通过过滤后文件数：", files.length, files.map(f => f.name));
   if (files.length === 0) {
-    flash("仅支持 .txt / .md 文件");
+    flash("仅支持 .txt / .md 文件（检测到文件：" + Array.from(fileList).map(f => f.name).join(", ") + "）");
     return;
   }
   let okCount = 0;
   for (const f of files) {
+    console.log("[上传] 开始处理:", f.name, "size=", f.size);
     if (f.size > 100 * 1024 * 1024) { flash(`${f.name} 超过 100MB，跳过`); continue; }
     if (f.size === 0) { flash(`${f.name} 是空文件`); continue; }
     try {
       const { text, encoding, size, name } = await readTextFromFile(f);
+      console.log("[上传] 读取完成:", name, "encoding=", encoding, "textLen=", (text || "").length);
       if (!text || text.length === 0) { flash(`${f.name} 解析后内容为空（可能编码不支持）`); continue; }
       await Store.addAsset(state.convId, {
         type: "txt", name, content: text, encoding, size, convId: state.convId, createdAt: Date.now(),
       });
+      console.log("[上传] 已写入 DB:", name);
       okCount++;
     } catch (e) {
       console.error("[上传] 失败", f.name, e);
@@ -343,6 +353,7 @@ async function sendChatInner() {
   }
   const api = Settings.getApi(state.apiAlias);
   if (!api) { flash("API 配置缺失"); return; }
+  console.log("[sendChat] api=", api.alias, "base_url=", api.base_url, "model=", api.model, "proxy=", (api.proxy || "无"));
   input.value = "";
   autoResizeInput();
 
@@ -587,32 +598,13 @@ export function bindGlobalUI() {
   document.querySelectorAll("[data-close-asset]").forEach(el => el.onclick = closeDrawerPanels);
 
   // 底部 / 上传
-  // 关键：隐藏的 input 在某些移动浏览器上 click() 无效
-  // 改用临时显示 / focus / click 三步
-  function openFilePicker() {
+  // 移动端可靠方案：直接用 label[for] 触发（已在 HTML 中配置）
+  // 底部 ＋ 按钮用 JS 点击 file input（用户手势链中有效）
+  $("#uploadBtn").onclick = () => {
     const inp = $("#fileInput");
-    inp.style.left = "0";
-    inp.style.width = "100%";
-    inp.style.height = "100%";
-    inp.style.opacity = "0.01";
-    inp.style.position = "fixed";
-    inp.style.top = "0";
-    inp.style.zIndex = "9999";
     inp.value = ""; // 重置，否则选同一个文件不触发 change
     inp.click();
-    // 1 秒后还原
-    setTimeout(() => {
-      inp.style.left = "-9999px";
-      inp.style.width = "1px";
-      inp.style.height = "1px";
-      inp.style.opacity = "0";
-      inp.style.position = "absolute";
-      inp.style.top = "auto";
-      inp.style.zIndex = "auto";
-    }, 1000);
-  }
-  $("#uploadBtn").onclick = openFilePicker;
-  $("#pickFileBtn").onclick = openFilePicker;
+  };
   $("#fileInput").onchange = (e) => {
     console.log("[fileInput.change] files=", e.target.files ? e.target.files.length : 0);
     onUploadFiles(e.target.files);
