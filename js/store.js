@@ -204,7 +204,9 @@ export function addAsset(convId, asset) {
     await ensureConvStore(convId);
     const db = await getDB();
     const id = asset.id || (asset.type + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8));
-    const record = { ...asset, id, createdAt: asset.createdAt || Date.now() };
+    // 预计算 contentLength，避免后续 render 时重复 new Blob()
+    const cl = typeof asset.content === "string" ? asset.content.length : 0;
+    const record = { ...asset, id, contentLength: cl, createdAt: asset.createdAt || Date.now() };
     const t = tx(db, [convId], "readwrite");
     await promisifyReq(t.objectStore(convId).put(record));
     await touchConv(convId);
@@ -216,7 +218,8 @@ export function putAsset(convId, asset) {
   return enqueue(async () => {
     await ensureConvStore(convId);
     const db = await getDB();
-    const record = { ...asset, createdAt: asset.createdAt || Date.now() };
+    const cl = typeof asset.content === "string" ? asset.content.length : 0;
+    const record = { ...asset, contentLength: cl, createdAt: asset.createdAt || Date.now() };
     const t = tx(db, [convId], "readwrite");
     await promisifyReq(t.objectStore(convId).put(record));
     await touchConv(convId);
@@ -224,6 +227,38 @@ export function putAsset(convId, asset) {
   });
 }
 
+// 手机端优化：只返回元数据，不加载 content 字段（避免一次性加载几百万字到内存）
+export function listAssetMetas(convId) {
+  return enqueue(async () => {
+    await ensureConvStore(convId);
+    const db = await getDB();
+    const t = tx(db, [convId]);
+    const store = t.objectStore(convId);
+    return new Promise((resolve, reject) => {
+      const metas = [];
+      const req = store.openCursor();
+      req.onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          const v = cursor.value;
+          // 排除 content 字段，只保留元数据
+          metas.push({
+            id: v.id, type: v.type, name: v.name, role: v.role,
+            encoding: v.encoding, contentLength: v.contentLength || 0,
+            bookId: v.bookId, chapterIndex: v.chapterIndex, chunkIndex: v.chunkIndex,
+            fileIds: v.fileIds, convId: v.convId, createdAt: v.createdAt,
+          });
+          cursor.continue();
+        } else {
+          resolve(metas);
+        }
+      };
+      req.onerror = () => reject(req.error);
+    });
+  });
+}
+
+// 完整加载（含 content）—— 仅在需要查看内容时调用
 export function listAssets(convId) {
   return enqueue(async () => {
     await ensureConvStore(convId);
@@ -281,18 +316,13 @@ export async function estimateStorage() {
 }
 
 export async function computeConvSize(convId) {
-  const assets = await listAssets(convId);
+  // 手机端优化：使用 contentLength 而非 new Blob() 计算，避免重复分配内存
+  const metas = await listAssetMetas(convId);
   let bytes = 0;
-  for (const a of assets) {
-    if (typeof a.content === "string") {
-      bytes += new Blob([a.content]).size;
-    } else if (a.content instanceof ArrayBuffer) {
-      bytes += a.content.byteLength;
-    } else if (a.content) {
-      try { bytes += new Blob([JSON.stringify(a.content)]).size; } catch {}
-    }
+  for (const a of metas) {
+    bytes += (a.contentLength || 0);
   }
-  return { assets, bytes };
+  return { assets: metas, bytes };
 }
 
 export function formatBytes(n) {

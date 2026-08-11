@@ -12,6 +12,9 @@ import { callLLM } from "./api.js";
 import { readTextFromFile } from "./split.js";
 import { runIndex } from "./indexer.js";
 
+// 推荐 CORS 代理（手机端必需）
+const SUGGESTED_PROXY = "https://corsproxy.io/?";
+
 const state = {
   convId: null,
   apiAlias: null,
@@ -95,20 +98,23 @@ async function renderHistory() {
 
 async function renderChat() {
   if (!state.convId) return;
-  const assets = await Store.listAssets(state.convId);
-  const msgs = assets
+  // 手机端优化：用 listAssetMetas 筛选 chat 类型，不加载 content
+  const allMetas = await Store.listAssetMetas(state.convId);
+  const chatMetas = allMetas
     .filter(a => a.type === "chat")
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   const wrap = $("#chatMsgs");
   wrap.innerHTML = "";
-  if (msgs.length === 0) {
+  if (chatMetas.length === 0) {
     wrap.innerHTML = `<div class="empty-hint">开始对话吧。<br>点击左下角 <strong>＋</strong> 上传小说作为上下文。</div>`;
     return;
   }
-  for (const m of msgs) {
+  // 聊天消息需要 content，逐个加载（只加载聊天消息，不加载小说大文件）
+  for (const m of chatMetas) {
+    const full = await Store.getAsset(state.convId, m.id);
     const div = document.createElement("div");
-    div.className = "msg " + m.role;
-    div.innerHTML = `<div class="msg-role">${m.role === "user" ? "我" : "AI"}</div>${escapeHtml(m.content)}`;
+    div.className = "msg " + (full ? full.role : "system");
+    div.innerHTML = `<div class="msg-role">${full && full.role === "user" ? "我" : "AI"}</div>${escapeHtml(full ? full.content || "" : "")}`;
     wrap.appendChild(div);
   }
   wrap.scrollTop = wrap.scrollHeight;
@@ -116,7 +122,8 @@ async function renderChat() {
 
 async function renderAssets() {
   if (!state.convId) return;
-  const list = await Store.listAssets(state.convId);
+  // 手机端优化：用 listAssetMetas 代替 listAssets，不加载 content 字段
+  const list = await Store.listAssetMetas(state.convId);
   const wrap = $("#assetList");
   wrap.innerHTML = "";
   if (list.length === 0) {
@@ -124,19 +131,18 @@ async function renderAssets() {
     return;
   }
   const order = { txt: 0, book: 1, "index-book": 2, "index-chapter": 3, "index-chunk": 4, chat: 5 };
-  list.sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9) || a.name.localeCompare(b.name));
+  list.sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9) || (a.name || "").localeCompare(b.name || ""));
   for (const a of list) {
     const row = document.createElement("div");
     row.className = "asset-row";
     const tagMap = { txt: "TXT", book: "BOOK", "index-book": "📚", "index-chapter": "📄", "index-chunk": "🔹", chat: "💬" };
     const tag = tagMap[a.type] || a.type;
-    const size = a.content ? new Blob([a.content]).size : 0;
     const checked = state.selectedAssetIds.has(a.id) ? "checked" : "";
     row.innerHTML = `
       <label class="check"><input type="checkbox" data-aid="${a.id}" ${checked}></label>
       <div class="asset-info">
-        <div class="asset-name"><span class="tag">${tag}</span>${escapeHtml(a.name)}</div>
-        <div class="asset-meta">${formatSize(size)}${a.encoding ? " · " + a.encoding : ""}</div>
+        <div class="asset-name"><span class="tag">${tag}</span>${escapeHtml(a.name || "")}</div>
+        <div class="asset-meta">${formatSize(a.contentLength || 0)}${a.encoding ? " · " + a.encoding : ""}</div>
       </div>
       <div class="asset-actions">
         <button class="btn-mini" data-act="view" data-aid="${a.id}">查看</button>
@@ -240,6 +246,9 @@ function openModelModal(alias = null) {
       $("#apiModel").value = a.model || "";
       $("#apiProxy").value = a.proxy || "";
     }
+  } else {
+    // 新建模型时，预填推荐代理地址（手机端必须）
+    $("#apiProxy").value = SUGGESTED_PROXY;
   }
   closeDrawerPanels();
   openModal("modelModal");
@@ -318,8 +327,8 @@ async function onUploadFiles(fileList) {
 }
 
 async function mergeSelectedIntoBook() {
-  const assets = await Store.listAssets(state.convId);
-  const txts = assets.filter(a => a.type === "txt" && state.selectedAssetIds.has(a.id));
+  const metas = await Store.listAssetMetas(state.convId);
+  const txts = metas.filter(a => a.type === "txt" && state.selectedAssetIds.has(a.id));
   if (txts.length < 2) { flash("请先勾选 2 个或以上 TXT"); return; }
   txts.sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN", { numeric: true }));
   const baseName = txts[0].name.replace(/\.(txt|md)$/i, "");
@@ -404,23 +413,36 @@ async function sendChatInner() {
     },
     onError: async (e) => {
       console.error("[LLM 错误]", e);
-      acc += (acc ? "\n\n" : "") + `⚠️ 调用失败：${e.message}\n（可能原因：模型 base_url 不可达 / CORS 被拒 / key 错误）`;
+      const errMsg = e.message || String(e);
+      acc += (acc ? "\n\n" : "") + `⚠️ 调用失败：${errMsg}`;
       if (aiRow) aiRow.innerHTML = `<div class="msg-role">AI</div>${escapeHtml(acc)}`;
       try {
         await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, convId: state.convId, createdAt: Date.now() });
       } catch (e2) { console.error("回写错误消息失败", e2); }
       setSending(false);
-      flash("AI 调用失败");
+      // 手机端醒目提示：长 toast + 弹窗
+      if (errMsg.includes("CORS") || errMsg.includes("fetch") || errMsg.includes("网络请求失败")) {
+        flashLong("⚠️ CORS 被拦截！请在模型设置中填写 CORS 代理（已预填推荐值），然后重试。");
+      } else {
+        flash("AI 调用失败：" + errMsg.slice(0, 60));
+      }
     },
   });
 }
 
 async function buildContext() {
-  const assets = await Store.listAssets(state.convId);
-  const selected = assets.filter(a => state.selectedAssetIds.has(a.id) && a.content);
-  const contexts = selected.map(a => `### ${a.name}（${a.type}）\n${a.content}`).join("\n\n");
+  // 手机端优化：先用 metas 定位选中资产，再逐个加载 content
+  const metas = await Store.listAssetMetas(state.convId);
+  const selected = metas.filter(a => state.selectedAssetIds.has(a.id));
+  const contexts = [];
+  for (const m of selected) {
+    const full = await Store.getAsset(state.convId, m.id);
+    if (full && full.content) {
+      contexts.push(`### ${full.name || ""}（${m.type}）\n${full.content}`);
+    }
+  }
   const system = "你是一个小说阅读助手，请基于用户提供的资料回答。";
-  return { system, contexts };
+  return { system, contexts: contexts.join("\n\n") };
 }
 
 function setSending(on) {
@@ -432,8 +454,9 @@ function setSending(on) {
 // ============== 索引 ==============
 async function openIndexerModal() {
   if (!state.apiAlias) { flash("请先配置模型"); return; }
-  const assets = await Store.listAssets(state.convId);
-  const books = assets.filter(a => a.type === "book");
+  // 手机端优化：用 metas 筛选 book 类型
+  const metas = await Store.listAssetMetas(state.convId);
+  const books = metas.filter(a => a.type === "book");
   const sel = $("#bookSelect");
   sel.innerHTML = "";
   if (books.length === 0) {
@@ -515,6 +538,23 @@ function flash(msg) {
   t.classList.add("show");
   clearTimeout(_toastT);
   _toastT = setTimeout(() => t.classList.remove("show"), 1800);
+}
+function flashLong(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  t.style.fontSize = "13px";
+  t.style.maxWidth = "90vw";
+  t.style.whiteSpace = "normal";
+  t.style.textAlign = "center";
+  clearTimeout(_toastT);
+  _toastT = setTimeout(() => {
+    t.classList.remove("show");
+    t.style.fontSize = "";
+    t.style.maxWidth = "";
+    t.style.whiteSpace = "";
+    t.style.textAlign = "";
+  }, 5000);
 }
 
 function autoResizeInput() {
