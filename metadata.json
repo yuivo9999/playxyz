@@ -1,6 +1,0 @@
-{
-  "name": "3D Virtual Cinema Experience",
-  "description": "Interactive 3D Virtual Cinema Auditorium and Seat Booking System with real-time 3D viewport.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
