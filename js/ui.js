@@ -114,7 +114,8 @@ async function renderChat() {
     const full = await Store.getAsset(state.convId, m.id);
     const div = document.createElement("div");
     div.className = "msg " + (full ? full.role : "system");
-    div.innerHTML = `<div class="msg-role">${full && full.role === "user" ? "我" : "AI"}</div>${escapeHtml(full ? full.content || "" : "")}`;
+    // 微信风格：纯气泡，无角色文字标签（位置本身已区分左右）
+    div.innerHTML = escapeHtml(full ? full.content || "" : "");
     wrap.appendChild(div);
   }
   wrap.scrollTop = wrap.scrollHeight;
@@ -188,6 +189,97 @@ function openModal(id) { $("#" + id).classList.add("open"); }
 function closeModal(id) { $("#" + id).classList.remove("open"); }
 
 // ============== 模型按钮 / 菜单 ==============
+// 从 NVIDIA build.nvidia.com 的 Node 代码块里自动抽出 base_url / api_key / model
+// 兼容 invokeUrl = "..." / Authorization: Bearer nvapi-... / "model": "..."
+function parseNvidiaCode(code) {
+  const out = { base_url: null, api_key: null, model: null, alias: null, errors: [] };
+  if (!code || !code.trim()) {
+    out.errors.push("粘贴内容为空");
+    return out;
+  }
+
+  // 1) invokeUrl（NVIDIA 标准字段名）
+  const urlMatch = code.match(/invokeUrl\s*=\s*["'`]([^"'`]+)["'`]/);
+  if (urlMatch) {
+    let url = urlMatch[1].trim();
+    // api.js 会自动拼 /chat/completions，这里把结尾剥掉避免重复
+    url = url.replace(/\/chat\/completions\/?$/i, "").replace(/\/+$/, "");
+    out.base_url = url;
+  } else {
+    // 兜底：抓 https://integrate.api.nvidia.com/...
+    const fallback = code.match(/https:\/\/integrate\.api\.nvidia\.com\/[^"'`\s]+/);
+    if (fallback) {
+      out.base_url = fallback[0].replace(/\/chat\/completions\/?$/i, "").replace(/\/+$/, "");
+    } else {
+      out.errors.push("未找到 invokeUrl");
+    }
+  }
+
+  // 2) Bearer token（两种写法都兼容）
+  const authObj = code.match(/["']Authorization["']\s*:\s*["'`]Bearer\s+([A-Za-z0-9._\-]+)["'`]/i);
+  const authBare = code.match(/Bearer\s+(nvapi-[A-Za-z0-9._\-]+)/);
+  if (authObj) {
+    out.api_key = authObj[1].trim();
+  } else if (authBare) {
+    out.api_key = authBare[1].trim();
+  } else {
+    out.errors.push("未找到 nvapi-... 密钥");
+  }
+
+  // 3) model（payload 里 "model": "xxx"）
+  const modelMatch = code.match(/["']model["']\s*:\s*["'`]([^"'`]+)["'`]/);
+  if (modelMatch) {
+    out.model = modelMatch[1].trim();
+  } else {
+    out.errors.push("未找到 model 字段");
+  }
+
+  // 4) 自动起别名 nvidia-<model 末段>
+  if (out.model) {
+    const tail = (out.model.split("/").pop() || out.model).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    out.alias = "nvidia-" + (tail || "model");
+  } else {
+    out.alias = "";
+  }
+
+  return out;
+}
+
+function applyNvidiaParseToForm() {
+  const code = $("#nvidiaPaste").value;
+  const r = parseNvidiaCode(code);
+  const status = $("#nvidiaParseStatus");
+  if (r.errors.length && !r.base_url && !r.api_key && !r.model) {
+    status.style.color = "#991b1b";
+    status.textContent = "❌ 识别失败：" + r.errors.join("；");
+    return;
+  }
+  if (r.base_url) $("#apiBaseUrl").value = r.base_url;
+  if (r.api_key)  $("#apiKey").value = r.api_key;
+  if (r.model)    $("#apiModel").value = r.model;
+  if (r.alias && !$("#apiAlias").value) $("#apiAlias").value = r.alias;
+  // 别名冲突时自动追加 -2 / -3 ...
+  if ($("#apiAlias").value) {
+    const exist = Settings.listApis().map(a => a.alias);
+    let alias = $("#apiAlias").value;
+    let i = 2;
+    while (exist.includes(alias)) {
+      alias = $("#apiAlias").value.replace(/-\d+$/, "") + "-" + i++;
+    }
+    $("#apiAlias").value = alias;
+  }
+  // 手机端预填推荐 CORS 代理
+  if (!$("#apiProxy").value) $("#apiProxy").value = SUGGESTED_PROXY;
+
+  if (r.errors.length) {
+    status.style.color = "#856404";
+    status.textContent = "⚠️ 部分字段需手动补：" + r.errors.join("；") + "（已自动填好其它项）";
+  } else {
+    status.style.color = "#1f7a3a";
+    status.textContent = "✅ 已填入：URL / Key / Model / 别名，请点下方「保存」";
+  }
+}
+
 function updateModelButton() {
   const apis = Settings.listApis();
   if (apis.length === 0) {
@@ -237,6 +329,10 @@ function openModelModal(alias = null) {
   $("#apiAlias").disabled = !!alias;
   $("#delModelBtn").style.display = alias ? "" : "none";
   $("#delModelBtn").dataset.alias = alias || "";
+  // 清掉上次的粘贴/识别状态
+  const pasteEl = $("#nvidiaPaste"); if (pasteEl) pasteEl.value = "";
+  const statusEl = $("#nvidiaParseStatus");
+  if (statusEl) { statusEl.textContent = ""; statusEl.style.color = ""; }
   if (alias) {
     const a = Settings.getApi(alias);
     if (a) {
@@ -400,7 +496,7 @@ async function sendChatInner() {
     signal: state.abortCtrl.signal,
     onToken: (t) => {
       acc += t;
-      if (aiRow) aiRow.innerHTML = `<div class="msg-role">AI</div>${escapeHtml(acc)}`;
+      if (aiRow) aiRow.textContent = acc;
       const w = $("#chatMsgs");
       w.scrollTop = w.scrollHeight;
     },
@@ -415,7 +511,7 @@ async function sendChatInner() {
       console.error("[LLM 错误]", e);
       const errMsg = e.message || String(e);
       acc += (acc ? "\n\n" : "") + `⚠️ 调用失败：${errMsg}`;
-      if (aiRow) aiRow.innerHTML = `<div class="msg-role">AI</div>${escapeHtml(acc)}`;
+      if (aiRow) aiRow.textContent = acc;
       try {
         await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, convId: state.convId, createdAt: Date.now() });
       } catch (e2) { console.error("回写错误消息失败", e2); }
@@ -496,9 +592,36 @@ async function startIndexing() {
       bookAsset: book,
       apiCfg: api,
       mode,
-      onProgress: (text, ratio) => {
+      onProgress: (info) => {
+        // indexer.js 传的是 { phase, current, total, title, ... }
+        // 把它格式化成「文字 + 0~1 进度」填到 UI
+        let text = "";
+        let ratio = 0;
+        if (!info) {
+          text = "处理中…";
+        } else if (info.phase === "split") {
+          text = "章节切分中…";
+          ratio = 0.02;
+        } else if (info.phase === "chapter") {
+          text = `总结章节 ${info.current}/${info.total}：${info.title || ""}`;
+          ratio = 0.05 + (info.current / Math.max(1, info.total)) * 0.7;
+        } else if (info.phase === "chunk") {
+          text = `章节 ${info.chapter || "?"}：块 ${info.chunk}/${info.chunkTotal}（${info.title || ""}）`;
+          const total = info.total || 1;
+          const ch = info.chapter || 1;
+          ratio = 0.05 + ((ch - 1) / total + (info.chunk / Math.max(1, info.chunkTotal)) / total) * 0.7;
+        } else if (info.phase === "book") {
+          text = "正在生成全书梗概…";
+          ratio = 0.85;
+        } else if (info.phase === "book-merge") {
+          text = `合并梗概 第 ${info.current}/${info.total} 层 ${info.level || ""}`;
+          ratio = 0.85 + (info.current / Math.max(1, info.total)) * 0.12;
+        } else {
+          text = "处理中…";
+        }
         $("#progressText").textContent = text;
-        $("#progressBar").style.width = (ratio * 100).toFixed(0) + "%";
+        const w = Math.max(0, Math.min(100, ratio * 100));
+        $("#progressBar").style.width = w.toFixed(0) + "%";
       },
       log: (line) => {
         $("#indexLog").textContent += line + "\n";
@@ -683,6 +806,12 @@ export function bindGlobalUI() {
   $("#saveModelBtn").onclick = saveModelFromForm;
   $("#delModelBtn").onclick = deleteModelFromForm;
   document.querySelectorAll("[data-close]").forEach(el => el.onclick = () => closeModal(el.dataset.close));
+
+  // NVIDIA 一键识别
+  const parseBtn = $("#parseNvidiaBtn");
+  if (parseBtn) parseBtn.onclick = applyNvidiaParseToForm;
+  const pasteEl = $("#nvidiaPaste");
+  if (pasteEl) pasteEl.addEventListener("paste", () => setTimeout(applyNvidiaParseToForm, 0));
 
   // 数据管理
   $("#exportJsonBtn").onclick = exportAllJson;
