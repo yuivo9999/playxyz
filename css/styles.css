@@ -111,26 +111,27 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
 }
 .empty-hint strong { color: #1f2328; }
 .msg {
-  max-width: 86%;
-  padding: 8px 12px;
-  border-radius: 12px;
+  max-width: 80%;
+  padding: 9px 12px;
+  border-radius: 10px;
   word-wrap: break-word;
   white-space: pre-wrap;
-  line-height: 1.5;
+  line-height: 1.55;
   font-size: 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 .msg.user {
   align-self: flex-end;
   background: #2f7cf6;
   color: #fff;
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: 2px;          /* 微信风：右下角收紧 */
 }
 .msg.assistant {
   align-self: flex-start;
   background: #fff;
   color: #1f2328;
   border: 1px solid #e5e7eb;
-  border-bottom-left-radius: 4px;
+  border-bottom-left-radius: 2px;            /* 微信风：左下角收紧 */
 }
 .msg.system {
   align-self: center;
@@ -139,13 +140,52 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
   font-size: 12px;
   padding: 6px 10px;
   border-radius: 6px;
+  box-shadow: none;
 }
-.msg-role {
-  font-size: 11px;
-  color: rgba(255,255,255,0.7);
-  margin-bottom: 2px;
+/* 微信风格不再显示气泡内的角色文字标签——位置本身已区分左右 */
+.msg-role { display: none; }
+
+/* 视觉上更像微信：相邻两条同向消息紧凑一点 */
+.chat-msgs { gap: 8px; padding: 12px 10px; }
+
+/* ===== NVIDIA 一键识别（模型弹窗顶部） ===== */
+.nvidia-paste details {
+  background: linear-gradient(180deg, #f7faff 0%, #eef4ff 100%);
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
 }
-.msg.assistant .msg-role { color: #6a737d; }
+.nvidia-paste summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #2f7cf6;
+  font-weight: 600;
+  list-style: none;
+  user-select: none;
+}
+.nvidia-paste summary::-webkit-details-marker { display: none; }
+.nvidia-paste summary::before { content: "▸ "; font-size: 11px; color: #6a737d; }
+.nvidia-paste details[open] summary::before { content: "▾ "; }
+.nvidia-paste .paste-hint { margin: 6px 0 6px; line-height: 1.6; }
+.nvidia-paste textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  resize: vertical;
+  min-height: 90px;
+  color: #1f2328;
+}
+.nvidia-paste textarea:focus { outline: 0; border-color: #2f7cf6; box-shadow: 0 0 0 3px rgba(47,124,246,0.15); }
+.nvidia-paste .or-divider { border: 0; border-top: 1px dashed #d0d7de; margin: 8px 0 6px; }
+.btn-mini.primary {
+  background: #2f7cf6; color: #fff; border-color: #2f7cf6;
+}
+.btn-mini.primary:hover { background: #1f6ae0; border-color: #1f6ae0; }
 
 /* ===== 底部输入条 ===== */
 .chat-foot {
