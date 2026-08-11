@@ -1,23 +1,22 @@
 // main.js
-import { boot } from "./ui.js";
+import { boot, bindGlobalUI } from "./ui.js";
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+}
 
 function showStartupError(err) {
   console.error("[启动失败]", err);
-  // 顶栏下方的小红条，z-index 不顶到顶栏，按钮始终可点
+  // 顶栏下方的红条，不遮顶栏
   const bar = document.createElement("div");
   bar.style.cssText = [
-    "position:fixed",
-    "top:52px",
-    "left:0",
-    "right:0",
-    "background:#fee2e2",
-    "color:#991b1b",
-    "padding:10px 16px",
-    "z-index:49",
+    "position:fixed", "top:48px", "left:0", "right:0",
+    "background:#fee2e2", "color:#991b1b",
+    "padding:10px 16px", "z-index:49",
     "border-bottom:1px solid #fecaca",
-    "font-size:13px",
-    "line-height:1.5",
-    "box-shadow:0 2px 4px rgba(0,0,0,0.04)",
+    "font-size:13px", "line-height:1.5",
   ].join(";");
   bar.innerHTML = `
     <strong>⚠ 启动失败：</strong> ${escapeHtml(err && err.message ? err.message : String(err))}
@@ -30,21 +29,25 @@ function showStartupError(err) {
     if (!confirm("将清空本浏览器内所有对话/资产/索引，确定？")) return;
     try {
       indexedDB.deleteDatabase("web_novel_reader");
-      // 等删除完成
-      await new Promise(r => setTimeout(r, 300));
+      await new Promise(r => setTimeout(r, 400));
       location.reload();
-    } catch (e) {
-      alert("清空失败：" + e.message);
-    }
+    } catch (e) { alert("清空失败：" + e.message); }
   };
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  })[c]);
+// 关键：先同步绑定所有 UI 事件，再异步 boot
+// 这样即使 boot 出错，☰ 等按钮仍然可用
+function start() {
+  try {
+    bindGlobalUI();
+  } catch (e) {
+    console.error("[bindGlobalUI 失败]", e);
+  }
+  boot().catch(showStartupError);
 }
 
-window.addEventListener("DOMContentLoaded", () => {
-  boot().catch(showStartupError);
-});
+if (document.readyState === "loading") {
+  window.addEventListener("DOMContentLoaded", start);
+} else {
+  start();
+}

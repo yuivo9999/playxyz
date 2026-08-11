@@ -1,63 +1,17 @@
 // api.js
-// 多 API 选择 + 令牌桶限速（≤ 30 次/分钟）+ 流式 fetch 调 LLM
+// OpenAI 兼容协议的流式 LLM 调用（无令牌桶）
 
 import { getApi } from "./settings.js";
-
-// ---------- 令牌桶 ----------
-// 容量 = 30，速率 = 25~28/分钟（留余量）
-class TokenBucket {
-  constructor({ capacity = 30, refillPerMinute = 27 } = {}) {
-    this.capacity = capacity;
-    this.refillPerMs = refillPerMinute / 60000;
-    this.tokens = capacity;
-    this.last = Date.now();
-    this.queue = [];
-  }
-  _refill() {
-    const now = Date.now();
-    const delta = now - this.last;
-    this.tokens = Math.min(this.capacity, this.tokens + delta * this.refillPerMs);
-    this.last = now;
-  }
-  acquire() {
-    this._refill();
-    if (this.tokens >= 1) {
-      this.tokens -= 1;
-      return Promise.resolve();
-    }
-    const need = 1 - this.tokens;
-    const waitMs = need / this.refillPerMs;
-    return new Promise(resolve => {
-      const t = setTimeout(() => {
-        this._refill();
-        this.tokens = Math.max(0, this.tokens - 1);
-        resolve();
-      }, waitMs);
-      this.queue.push(t);
-    });
-  }
-  // 简单状态：用于 UI 调试
-  status() {
-    this._refill();
-    return { tokens: this.tokens.toFixed(2), capacity: this.capacity };
-  }
-}
-
-const rateLimiter = new TokenBucket({ capacity: 30, refillPerMinute: 27 });
-export function getRateLimiterStatus() { return rateLimiter.status(); }
 
 // ---------- SSE 解析 ----------
 // 按行解析 data: {...} 流，data: [DONE] 结束
 function parseSSEChunk(buffer) {
-  // 返回 { events: [...], rest: string }
   const events = [];
-  let i;
   const parts = buffer.split("\n");
   let rest = "";
-  for (i = 0; i < parts.length; i++) {
+  for (let i = 0; i < parts.length; i++) {
     const line = parts[i];
     if (i === parts.length - 1 && !buffer.endsWith("\n")) {
-      // 最后一段不完整，留到下次
       rest = line;
       break;
     }
@@ -82,7 +36,6 @@ function parseSSEChunk(buffer) {
 // onError: (err) => void
 // signal: AbortSignal
 export async function callLLM(apiCfg, messages, { onToken, onDone, onError, signal } = {}) {
-  await rateLimiter.acquire();
   const url = (apiCfg.base_url || "").replace(/\/+$/, "") + "/chat/completions";
   const body = {
     model: apiCfg.model,
@@ -154,7 +107,7 @@ export async function callLLMOnce(apiCfg, messages, { signal } = {}) {
   });
 }
 
-// 信号量：Promise 池
+// 信号量：Promise 池（用于 speed 模式并发限流）
 export class Semaphore {
   constructor(n) { this.n = n; this.cur = 0; this.q = []; }
   async acquire() {

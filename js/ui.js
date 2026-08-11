@@ -1,28 +1,27 @@
 // ui.js
-// ☰ 导航 / 资产库 / 聊天 / 存储管理 / 设置 渲染与事件
+// 移动端极简 UI：
+// 顶栏：[☰] [标题] [📚] [＋]
+// 主区：聊天消息流
+// 底栏：[＋上传] [模型选择] [输入框] [发送]
+// 侧滑：左侧设置抽屉 / 右侧资产库抽屉
+// 模型下拉：点击底部模型按钮弹出
 
 import * as Store from "./store.js";
 import * as Settings from "./settings.js";
-import { callByAlias, getRateLimiterStatus, callLLMOnce, callLLM } from "./api.js";
+import { callLLM } from "./api.js";
+import { readTextFromFile } from "./split.js";
 import { runIndex } from "./indexer.js";
-import { readTextFromFile, detectChapters, chunkByChar } from "./split.js";
-// 状态
+
 const state = {
   convId: null,
-  skill: "chat", // "chat" | "indexer"
   apiAlias: null,
   abortCtrl: null,
   selectedAssetIds: new Set(),
-  selectedChapterRanges: new Map(), // assetId -> [{from,to}]
 };
 
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => Array.from(document.querySelectorAll(sel));
-
-// =================== 启动 ===================
-
+// ============== 启动 ==============
 export async function boot() {
-  // 加载默认设置
+  // 加载默认 API
   const def = Settings.getDefaults();
   const apis = Settings.listApis();
   if (def.defaultApiAlias && apis.find(a => a.alias === def.defaultApiAlias)) {
@@ -30,160 +29,33 @@ export async function boot() {
   } else if (apis.length > 0) {
     state.apiAlias = apis[0].alias;
   }
-
-  // 创建或恢复对话
+  // 加载默认参数到表单
+  $("#chunkSize").value = def.chunkSize || 1500;
+  $("#maxConcurrency").value = def.maxConcurrency || 3;
+  $("#splitPattern").value = def.splitPattern || "";
+  updateModelButton();
+  // 加载/创建对话
   const list = await Store.listConversations();
   let cur = list[0];
-  if (!cur) {
-    cur = await Store.createConversation({ title: "新对话" });
-  }
-  state.convId = cur.id;
-
-  bindGlobalUI();
-  renderAll();
-  tickRateLimiter();
-  setInterval(tickRateLimiter, 2000);
+  if (!cur) cur = await Store.createConversation({ title: "新对话" });
+  await switchConv(cur.id, false);
+  await renderAll();
 }
 
-function bindGlobalUI() {
-  // ☰ 抽屉
-  $("#menuBtn").onclick = () => $("#drawer").classList.toggle("open");
-  $("#drawerClose").onclick = () => $("#drawer").classList.remove("open");
-  $("#drawer").onclick = (e) => { if (e.target.id === "drawer") $("#drawer").classList.remove("open"); };
-
-  $("#newConvBtn").onclick = async () => {
-    const c = await Store.createConversation({ title: "新对话" + (new Date()).toLocaleTimeString() });
-    state.convId = c.id;
-    state.selectedAssetIds.clear();
-    state.selectedChapterRanges.clear();
-    renderAll();
-    $("#drawer").classList.remove("open");
-  };
-
-  $("#settingsBtn").onclick = () => { renderSettings(); openModal("settingsModal"); };
-  $("#storageBtn").onclick = () => { renderStorage(); openModal("storageModal"); };
-  $("#historyBtn").onclick = () => { renderHistory(); $("#drawer").classList.remove("open"); };
-
-  // 技能切换
-  $$(".skill-tab").forEach(el => {
-    el.onclick = () => {
-      state.skill = el.dataset.skill;
-      $$(".skill-tab").forEach(t => t.classList.toggle("active", t.dataset.skill === state.skill));
-      renderMain();
-    };
-  });
-
-  // 模型下拉
-  $("#modelSelect").onchange = (e) => { state.apiAlias = e.target.value; };
-
-  // 上传 TXT
-  $("#fileInput").onchange = (e) => onUploadFiles(e.target.files);
-  $("#dropZone").ondragover = (e) => { e.preventDefault(); $("#dropZone").classList.add("hover"); };
-  $("#dropZone").ondragleave = () => $("#dropZone").classList.remove("hover");
-  $("#dropZone").ondrop = (e) => {
-    e.preventDefault();
-    $("#dropZone").classList.remove("hover");
-    onUploadFiles(e.dataTransfer.files);
-  };
-
-  // 索引模式
-  $("#modeSelect").onchange = () => {};
-  $("#startIndexBtn").onclick = () => startIndexing();
-
-  // 合并书
-  $("#mergeBookBtn").onclick = () => mergeSelectedIntoBook();
-
-  // 聊天
-  $("#sendBtn").onclick = () => sendChat();
-  $("#chatInput").onkeydown = (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendChat(); }
-  };
-  $("#abortBtn").onclick = () => { if (state.abortCtrl) state.abortCtrl.abort(); };
-
-  // 设置 / 存储 Modal 关闭
-  $$("[data-close]").forEach(el => el.onclick = () => closeModal(el.dataset.close));
-
-  // 设置：新增 API
-  $("#addApiBtn").onclick = () => addApiFromForm();
-  $("#importJsonBtn").onclick = () => {
-    const inp = document.createElement("input");
-    inp.type = "file";
-    inp.accept = ".json";
-    inp.onchange = (e) => {
-      const f = e.target.files[0];
-      if (!f) return;
-      const r = new FileReader();
-      r.onload = () => {
-        try {
-          const data = JSON.parse(r.result);
-          // 期望格式：{ apis: [...], chat: [...] }
-          if (data.apis) {
-            for (const a of data.apis) Settings.saveApi(a);
-          }
-          if (data.chats) {
-            (async () => {
-              for (const c of data.chats) {
-                const conv = await Store.createConversation({ title: c.title || "导入对话" });
-                for (const a of (c.assets || [])) {
-                  await Store.addAsset(conv.id, { ...a, convId: conv.id });
-                }
-              }
-              renderAll();
-            })();
-          }
-        } catch (e) { alert("导入失败：" + e.message); }
-      };
-      r.readAsText(f);
-    };
-    inp.click();
-  };
-  $("#exportJsonBtn").onclick = exportAllAsJson;
-  $("#clearAllBtn").onclick = clearAll;
-
-  // 默认值保存
-  $("#saveDefaultsBtn").onclick = () => {
-    Settings.saveDefaults({
-      defaultApiAlias: $("#defaultApiAlias").value || null,
-      chunkSize: parseInt($("#chunkSize").value, 10) || 1500,
-      maxConcurrency: parseInt($("#maxConcurrency").value, 10) || 3,
-      splitPattern: $("#splitPattern").value.trim() || null,
-    });
-    flash("已保存默认值");
-  };
+async function switchConv(convId, closeDrawer = true) {
+  state.convId = convId;
+  state.selectedAssetIds.clear();
+  const conv = await Store.getConversation(convId);
+  $("#convTitle").textContent = conv ? conv.title : "新对话";
+  if (closeDrawer) closeDrawerPanels();
+  await renderAll();
 }
 
-function tickRateLimiter() {
-  const s = getRateLimiterStatus();
-  $("#rateStat").textContent = `令牌桶：${s.tokens} / ${s.capacity}`;
-}
-
-// =================== 渲染 ===================
-
+// ============== 渲染 ==============
 async function renderAll() {
-  renderHistory();
-  renderApiSelect();
-  renderAssets();
-  renderMain();
-  renderStorage();
-}
-
-function renderApiSelect() {
-  const apis = Settings.listApis();
-  const sel = $("#modelSelect");
-  sel.innerHTML = "";
-  if (apis.length === 0) {
-    sel.innerHTML = `<option value="">(请先在「设置」添加 API)</option>`;
-    state.apiAlias = null;
-    return;
-  }
-  for (const a of apis) {
-    const opt = document.createElement("option");
-    opt.value = a.alias;
-    opt.textContent = `${a.alias} · ${a.model}`;
-    sel.appendChild(opt);
-  }
-  if (!apis.find(a => a.alias === state.apiAlias)) state.apiAlias = apis[0].alias;
-  sel.value = state.apiAlias;
+  await renderHistory();
+  await renderChat();
+  await renderAssets();
 }
 
 async function renderHistory() {
@@ -191,147 +63,327 @@ async function renderHistory() {
   const wrap = $("#historyList");
   wrap.innerHTML = "";
   if (list.length === 0) {
-    wrap.innerHTML = `<div class="muted">暂无历史对话</div>`;
+    wrap.innerHTML = `<div class="muted small" style="padding:6px">暂无对话</div>`;
     return;
   }
   for (const c of list) {
     const row = document.createElement("div");
     row.className = "conv-row" + (c.id === state.convId ? " active" : "");
     row.innerHTML = `
-      <label class="check"><input type="checkbox" data-cid="${c.id}"></label>
       <div class="conv-info">
         <div class="conv-title">${escapeHtml(c.title)}</div>
         <div class="conv-meta">${new Date(c.updatedAt).toLocaleString()}</div>
       </div>
+      <button class="btn-mini danger" data-del-conv="${c.id}">删</button>
     `;
-    row.querySelector(".conv-info").onclick = () => {
-      state.convId = c.id;
-      state.selectedAssetIds.clear();
-      state.selectedChapterRanges.clear();
-      renderAll();
-      $("#drawer").classList.remove("open");
+    row.querySelector(".conv-info").onclick = () => switchConv(c.id);
+    row.querySelector("[data-del-conv]").onclick = async (e) => {
+      e.stopPropagation();
+      if (!confirm(`确认删除「${c.title}」？`)) return;
+      await Store.deleteConversation(c.id);
+      if (state.convId === c.id) {
+        const rest = await Store.listConversations();
+        const next = rest[0] || await Store.createConversation({ title: "新对话" });
+        await switchConv(next.id, false);
+      } else {
+        await renderHistory();
+      }
     };
     wrap.appendChild(row);
   }
-  $("#deleteSelectedConvBtn").onclick = async () => {
-    const ids = $$("#historyList input:checked").map(i => i.dataset.cid);
-    if (ids.length === 0) return flash("请先勾选要删除的对话");
-    if (!confirm(`确认删除 ${ids.length} 个对话？此操作不可恢复。`)) return;
-    await Store.deleteConversations(ids);
-    if (ids.includes(state.convId)) {
-      const rest = await Store.listConversations();
-      if (rest.length > 0) state.convId = rest[0].id;
-      else {
-        const nc = await Store.createConversation({ title: "新对话" });
-        state.convId = nc.id;
-      }
-    }
-    renderAll();
-  };
+}
+
+async function renderChat() {
+  if (!state.convId) return;
+  const assets = await Store.listAssets(state.convId);
+  const msgs = assets
+    .filter(a => a.type === "chat")
+    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  const wrap = $("#chatMsgs");
+  wrap.innerHTML = "";
+  if (msgs.length === 0) {
+    wrap.innerHTML = `<div class="empty-hint">开始对话吧。<br>点击左下角 <strong>＋</strong> 上传小说作为上下文。</div>`;
+    return;
+  }
+  for (const m of msgs) {
+    const div = document.createElement("div");
+    div.className = "msg " + m.role;
+    div.innerHTML = `<div class="msg-role">${m.role === "user" ? "我" : "AI"}</div>${escapeHtml(m.content)}`;
+    wrap.appendChild(div);
+  }
+  wrap.scrollTop = wrap.scrollHeight;
 }
 
 async function renderAssets() {
+  if (!state.convId) return;
   const list = await Store.listAssets(state.convId);
   const wrap = $("#assetList");
   wrap.innerHTML = "";
   if (list.length === 0) {
-    wrap.innerHTML = `<div class="muted">还没有资产。在上方上传 TXT，或先在「设置」配置 API。</div>`;
+    wrap.innerHTML = `<div class="muted small" style="padding:6px">还没有资产。拖拽 TXT 进来或点击下方「＋」上传。</div>`;
     return;
   }
-  // 排序：txt / book 在前，index 在后
   const order = { txt: 0, book: 1, "index-book": 2, "index-chapter": 3, "index-chunk": 4, chat: 5 };
   list.sort((a, b) => (order[a.type] ?? 9) - (order[b.type] ?? 9) || a.name.localeCompare(b.name));
   for (const a of list) {
     const row = document.createElement("div");
     row.className = "asset-row";
-    const size = a.content ? new Blob([a.content]).size : 0;
     const tagMap = { txt: "TXT", book: "BOOK", "index-book": "📚", "index-chapter": "📄", "index-chunk": "🔹", chat: "💬" };
     const tag = tagMap[a.type] || a.type;
+    const size = a.content ? new Blob([a.content]).size : 0;
     const checked = state.selectedAssetIds.has(a.id) ? "checked" : "";
     row.innerHTML = `
       <label class="check"><input type="checkbox" data-aid="${a.id}" ${checked}></label>
       <div class="asset-info">
-        <div class="asset-name"><span class="tag">${tag}</span> ${escapeHtml(a.name)}</div>
-        <div class="asset-meta">${formatSize(size)}${a.encoding ? " · " + a.encoding : ""}${a.bookId ? " · 归属书：" + a.bookId.slice(0,12) : ""}</div>
+        <div class="asset-name"><span class="tag">${tag}</span>${escapeHtml(a.name)}</div>
+        <div class="asset-meta">${formatSize(size)}${a.encoding ? " · " + a.encoding : ""}</div>
       </div>
       <div class="asset-actions">
-        ${a.type === "book" ? `<button class="btn-mini" data-act="view" data-aid="${a.id}">查看</button>` : ""}
-        ${a.type && a.type.startsWith("index-") ? `<button class="btn-mini" data-act="view" data-aid="${a.id}">查看</button>` : ""}
-        <button class="btn-mini" data-act="copy" data-aid="${a.id}">复制</button>
-        <button class="btn-mini danger" data-act="del" data-aid="${a.id}">删除</button>
+        <button class="btn-mini" data-act="view" data-aid="${a.id}">查看</button>
+        <button class="btn-mini danger" data-act="del" data-aid="${a.id}">删</button>
       </div>
     `;
     wrap.appendChild(row);
   }
-  // 事件
   wrap.querySelectorAll("input[type=checkbox]").forEach(cb => {
     cb.onchange = () => {
-      const id = cb.dataset.aid;
-      if (cb.checked) state.selectedAssetIds.add(id); else state.selectedAssetIds.delete(id);
-      updateSelectedPreview();
+      if (cb.checked) state.selectedAssetIds.add(cb.dataset.aid);
+      else state.selectedAssetIds.delete(cb.dataset.aid);
     };
   });
   wrap.querySelectorAll("button[data-act]").forEach(btn => {
     btn.onclick = () => handleAssetAction(btn.dataset.act, btn.dataset.aid);
   });
-  updateSelectedPreview();
-}
-
-function updateSelectedPreview() {
-  const ids = Array.from(state.selectedAssetIds);
-  $("#selectedSummary").textContent = ids.length === 0 ? "（未选）" : `已选 ${ids.length} 项`;
 }
 
 async function handleAssetAction(act, aid) {
   const a = await Store.getAsset(state.convId, aid);
   if (!a) return;
   if (act === "del") {
-    if (!confirm(`确认删除资产「${a.name}」？`)) return;
+    if (!confirm(`删除「${a.name}」？`)) return;
     await Store.deleteAsset(state.convId, aid);
     state.selectedAssetIds.delete(aid);
-    renderAll();
+    await renderAssets();
   } else if (act === "view") {
-    showAssetContent(a);
-  } else if (act === "copy") {
-    const c = a.content || "";
-    try {
-      await navigator.clipboard.writeText(c);
-      flash("已复制到剪贴板");
-    } catch {
-      // fallback
-      const ta = document.createElement("textarea");
-      ta.value = c; document.body.appendChild(ta); ta.select();
-      document.execCommand("copy"); document.body.removeChild(ta);
-      flash("已复制（fallback）");
+    $("#viewerTitle").textContent = a.name;
+    $("#viewerBody").textContent = a.content || "(空)";
+    $("#viewerMeta").textContent = `${a.type} · ${formatSize(new Blob([a.content || ""]).size)}`;
+    openModal("viewerModal");
+  }
+}
+
+// ============== 抽屉 / Modal 控制 ==============
+function openDrawer(id) { $("#" + id).classList.add("open"); }
+function closeDrawerPanels() {
+  document.querySelectorAll(".drawer").forEach(d => d.classList.remove("open"));
+  $("#modelMenu").style.display = "none";
+}
+function openModal(id) { $("#" + id).classList.add("open"); }
+function closeModal(id) { $("#" + id).classList.remove("open"); }
+
+// ============== 模型按钮 / 菜单 ==============
+function updateModelButton() {
+  const apis = Settings.listApis();
+  if (apis.length === 0) {
+    $("#modelLabel").textContent = "添加模型";
+  } else {
+    const cur = apis.find(a => a.alias === state.apiAlias) || apis[0];
+    state.apiAlias = cur.alias;
+    $("#modelLabel").textContent = `${cur.alias}`;
+  }
+}
+
+function renderModelMenu() {
+  const apis = Settings.listApis();
+  const wrap = $("#modelMenuList");
+  wrap.innerHTML = "";
+  if (apis.length === 0) {
+    wrap.innerHTML = `<div class="muted small" style="padding:6px">还没有模型，点击下方添加</div>`;
+  } else {
+    for (const a of apis) {
+      const row = document.createElement("div");
+      row.className = "model-menu-item" + (a.alias === state.apiAlias ? " active" : "");
+      row.innerHTML = `
+        <span>${escapeHtml(a.alias)} <span class="muted small">· ${escapeHtml(a.model)}</span></span>
+        <span class="edit">编辑</span>
+      `;
+      row.onclick = (e) => {
+        if (e.target.classList.contains("edit")) {
+          openModelModal(a.alias);
+        } else {
+          state.apiAlias = a.alias;
+          Settings.saveDefaults({ ...Settings.getDefaults(), defaultApiAlias: a.alias });
+          updateModelButton();
+          closeDrawerPanels();
+        }
+      };
+      wrap.appendChild(row);
     }
   }
+  $("#modelMenu").style.display = "";
 }
 
-async function showAssetContent(a) {
-  $("#viewerTitle").textContent = a.name;
-  $("#viewerBody").textContent = a.content || "(空)";
-  $("#viewerMeta").textContent = `${a.type} · ${formatSize(new Blob([a.content || ""]).size)}`;
-  openModal("viewerModal");
-}
-
-function renderMain() {
-  // 顶栏：模型
-  renderApiSelect();
-  // 区段
-  $$(".skill-tab").forEach(t => t.classList.toggle("active", t.dataset.skill === state.skill));
-  if (state.skill === "indexer") {
-    $("#indexerPanel").style.display = "";
-    $("#chatPanel").style.display = "none";
-    renderIndexerPanel();
-  } else {
-    $("#indexerPanel").style.display = "none";
-    $("#chatPanel").style.display = "";
-    renderChatPanel();
+function openModelModal(alias = null) {
+  $("#modelModalTitle").textContent = alias ? `编辑模型：${alias}` : "添加模型";
+  $("#apiAlias").value = ""; $("#apiBaseUrl").value = "";
+  $("#apiKey").value = ""; $("#apiModel").value = "";
+  $("#apiAlias").disabled = !!alias;
+  $("#delModelBtn").style.display = alias ? "" : "none";
+  $("#delModelBtn").dataset.alias = alias || "";
+  if (alias) {
+    const a = Settings.getApi(alias);
+    if (a) {
+      $("#apiAlias").value = a.alias;
+      $("#apiBaseUrl").value = a.base_url || "";
+      $("#apiKey").value = a.api_key || "";
+      $("#apiModel").value = a.model || "";
+    }
   }
+  closeDrawerPanels();
+  openModal("modelModal");
 }
 
-async function renderIndexerPanel() {
-  // 选书
+function saveModelFromForm() {
+  const alias = $("#apiAlias").value.trim();
+  const base_url = $("#apiBaseUrl").value.trim();
+  const api_key = $("#apiKey").value.trim();
+  const model = $("#apiModel").value.trim();
+  if (!alias || !base_url || !model) {
+    flash("请填写别名、Base URL、Model");
+    return;
+  }
+  const rec = { alias, base_url, api_key, model };
+  Settings.saveApi(rec);
+  if (!state.apiAlias) state.apiAlias = alias;
+  Settings.saveDefaults({ ...Settings.getDefaults(), defaultApiAlias: state.apiAlias });
+  updateModelButton();
+  closeModal("modelModal");
+  flash("已保存");
+}
+
+function deleteModelFromForm() {
+  const alias = $("#delModelBtn").dataset.alias;
+  if (!alias) return;
+  if (!confirm(`删除模型「${alias}」？`)) return;
+  Settings.deleteApi(alias);
+  const apis = Settings.listApis();
+  state.apiAlias = apis[0]?.alias || null;
+  Settings.saveDefaults({ ...Settings.getDefaults(), defaultApiAlias: state.apiAlias });
+  updateModelButton();
+  closeModal("modelModal");
+  flash("已删除");
+}
+
+// ============== 上传 ==============
+async function onUploadFiles(fileList) {
+  const files = Array.from(fileList).filter(f => /\.(txt|md)$/i.test(f.name) || f.type.startsWith("text/"));
+  if (files.length === 0) { flash("仅支持 .txt / .md"); return; }
+  for (const f of files) {
+    if (f.size > 100 * 1024 * 1024) { flash(`${f.name} 超过 100MB，跳过`); continue; }
+    try {
+      const { text, encoding, size, name } = await readTextFromFile(f);
+      await Store.addAsset(state.convId, {
+        type: "txt", name, content: text, encoding, size, createdAt: Date.now(),
+      });
+    } catch (e) {
+      flash("读取失败：" + e.message);
+    }
+  }
+  await renderAssets();
+  flash(`已上传 ${files.length} 个文件`);
+}
+
+async function mergeSelectedIntoBook() {
+  const assets = await Store.listAssets(state.convId);
+  const txts = assets.filter(a => a.type === "txt" && state.selectedAssetIds.has(a.id));
+  if (txts.length < 2) { flash("请先勾选 2 个或以上 TXT"); return; }
+  txts.sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN", { numeric: true }));
+  const baseName = txts[0].name.replace(/\.(txt|md)$/i, "");
+  const bookName = prompt("请输入书名", baseName);
+  if (!bookName) return;
+  await Store.addAsset(state.convId, {
+    type: "book", name: bookName, fileIds: txts.map(t => t.id), convId: state.convId, createdAt: Date.now(),
+  });
+  flash(`已合并为「${bookName}」`);
+  await renderAssets();
+}
+
+// ============== 聊天发送 ==============
+async function sendChat() {
+  const input = $("#chatInput");
+  const text = input.value.trim();
+  if (!text) return;
+  if (!state.apiAlias) {
+    flash("请先在底部选择/添加模型");
+    return;
+  }
+  const api = Settings.getApi(state.apiAlias);
+  if (!api) { flash("API 配置缺失"); return; }
+  input.value = "";
+  autoResizeInput();
+
+  // 用户消息入 DB
+  await Store.addAsset(state.convId, { type: "chat", role: "user", content: text, createdAt: Date.now() });
+  // 构造上下文
+  const ctx = await buildContext();
+  const messages = [];
+  if (ctx.system) messages.push({ role: "system", content: ctx.system });
+  if (ctx.contexts.length > 0) {
+    messages.push({ role: "system", content: "以下是与当前对话相关的资料：\n\n" + ctx.contexts });
+  }
+  messages.push({ role: "user", content: text });
+
+  // 占位 AI 消息
+  const aiId = "chat_" + Date.now() + "_ai";
+  await Store.addAsset(state.convId, { type: "chat", id: aiId, role: "assistant", content: "", createdAt: Date.now() });
+  await renderChat();
+
+  // 找占位元素
+  const aiRow = [...$$("#chatMsgs .msg.assistant")].pop();
+  let acc = "";
+
+  state.abortCtrl = new AbortController();
+  setSending(true);
+
+  await callLLM(api, messages, {
+    signal: state.abortCtrl.signal,
+    onToken: (t) => {
+      acc += t;
+      if (aiRow) aiRow.innerHTML = `<div class="msg-role">AI</div>${escapeHtml(acc)}`;
+      const w = $("#chatMsgs");
+      w.scrollTop = w.scrollHeight;
+    },
+    onDone: async () => {
+      // 回写最终内容
+      await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, createdAt: Date.now() });
+      setSending(false);
+    },
+    onError: async (e) => {
+      acc += (acc ? "\n\n" : "") + `[错误] ${e.message}`;
+      if (aiRow) aiRow.innerHTML = `<div class="msg-role">AI</div>${escapeHtml(acc)}`;
+      await Store.putAsset(state.convId, { id: aiId, type: "chat", role: "assistant", content: acc, createdAt: Date.now() });
+      setSending(false);
+    },
+  });
+}
+
+async function buildContext() {
+  const assets = await Store.listAssets(state.convId);
+  const selected = assets.filter(a => state.selectedAssetIds.has(a.id) && a.content);
+  const contexts = selected.map(a => `### ${a.name}（${a.type}）\n${a.content}`).join("\n\n");
+  const system = "你是一个小说阅读助手，请基于用户提供的资料回答。";
+  return { system, contexts };
+}
+
+function setSending(on) {
+  $("#sendBtn").style.display = on ? "none" : "";
+  $("#abortBtn").style.display = on ? "" : "none";
+  $("#sendBtn").disabled = on;
+}
+
+// ============== 索引 ==============
+async function openIndexerModal() {
+  if (!state.apiAlias) { flash("请先配置模型"); return; }
   const assets = await Store.listAssets(state.convId);
   const books = assets.filter(a => a.type === "book");
   const sel = $("#bookSelect");
@@ -347,343 +399,217 @@ async function renderIndexerPanel() {
     }
     $("#startIndexBtn").disabled = false;
   }
+  $("#progressWrap").style.display = "none";
+  $("#indexLog").style.display = "none";
+  $("#indexLog").textContent = "";
+  openModal("indexerModal");
 }
-
-async function renderChatPanel() {
-  const list = await Store.listAssets(state.convId);
-  const chatMsgs = list.filter(a => a.type === "chat").sort((a, b) => a.createdAt - b.createdAt);
-  const wrap = $("#chatMsgs");
-  wrap.innerHTML = "";
-  if (chatMsgs.length === 0) {
-    wrap.innerHTML = `<div class="muted">开始对话吧。勾选左侧资产作为上下文，或直接发问。</div>`;
-  } else {
-    for (const m of chatMsgs) {
-      const div = document.createElement("div");
-      div.className = "msg " + m.role;
-      div.innerHTML = `<div class="msg-role">${m.role === "user" ? "我" : "AI"}</div><div class="msg-body">${escapeHtml(m.content)}</div>`;
-      wrap.appendChild(div);
-    }
-    wrap.scrollTop = wrap.scrollHeight;
-  }
-}
-
-// =================== 上传 ===================
-
-async function onUploadFiles(fileList) {
-  const files = Array.from(fileList).filter(f => /\.(txt|md)$/i.test(f.name) || f.type.startsWith("text/"));
-  if (files.length === 0) { flash("仅支持 .txt / .md"); return; }
-  for (const f of files) {
-    if (f.size > 100 * 1024 * 1024) { flash(`文件 ${f.name} 超过 100MB，跳过`); continue; }
-    try {
-      const { text, encoding, size, name } = await readTextFromFile(f);
-      const id = "txt_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
-      await Store.addAsset(state.convId, {
-        id, type: "txt", name, content: text, encoding, size, createdAt: Date.now(),
-      });
-    } catch (e) {
-      flash("读取失败：" + f.name + " " + e.message);
-    }
-  }
-  renderAll();
-}
-
-async function mergeSelectedIntoBook() {
-  const assets = await Store.listAssets(state.convId);
-  const txts = assets.filter(a => a.type === "txt" && state.selectedAssetIds.has(a.id));
-  if (txts.length < 2) { flash("请先勾选 2 个或以上 TXT（同一本书的多卷）"); return; }
-  // 排序：按 name 自然序（上/中/下、1/2/3）
-  txts.sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN", { numeric: true }));
-  const baseName = (txts[0].name.replace(/\.(txt|md)$/i, "").replace(/[\s_-]+(上|中|下|vol\.?\s*\d+|\d+)$/i, ""));
-  const bookName = prompt("请输入书名（合并后）", baseName);
-  if (!bookName) return;
-  const id = "book_" + Date.now();
-  await Store.addAsset(state.convId, {
-    id, type: "book", name: bookName, fileIds: txts.map(t => t.id), createdAt: Date.now(),
-  });
-  flash(`已合并为「${bookName}」`);
-  renderAll();
-}
-
-// =================== 索引 ===================
 
 async function startIndexing() {
-  if (!state.apiAlias) { flash("请先在「设置」配置 API"); return; }
-  const apiCfg = Settings.getApi(state.apiAlias);
-  if (!apiCfg) { flash("API 配置缺失"); return; }
   const bookId = $("#bookSelect").value;
   if (!bookId) return;
   const book = await Store.getAsset(state.convId, bookId);
   if (!book) return;
   const mode = $("#modeSelect").value;
+  const def = Settings.getDefaults();
+  const api = Settings.getApi(state.apiAlias);
   state.abortCtrl = new AbortController();
   $("#startIndexBtn").disabled = true;
-  $("#abortBtn").style.display = "";
+  $("#abortIndexBtn").style.display = "";
   $("#progressWrap").style.display = "";
-  $("#progressText").textContent = "准备中…";
-  $("#progressBar").style.width = "0%";
-  const log = (lvl, msg) => {
-    const el = $("#indexLog");
-    el.style.display = "";
-    const t = new Date().toLocaleTimeString();
-    el.textContent += `[${t}] ${lvl === "error" ? "❌" : "ℹ️"} ${msg}\n`;
-    el.scrollTop = el.scrollHeight;
-  };
+  $("#indexLog").style.display = "";
+  $("#indexLog").textContent = "";
+
   try {
-    const result = await runIndex({
-      mode, apiCfg, bookAsset: book, signal: state.abortCtrl.signal, log,
-      onProgress: (p) => {
-        if (p.phase === "split") { $("#progressText").textContent = p.title; }
-        else if (p.phase === "chapter") {
-          $("#progressText").textContent = `章节 ${p.current}/${p.total}：${p.title}`;
-          $("#progressBar").style.width = (p.current / p.total * 100).toFixed(1) + "%";
-        } else if (p.phase === "chunk") {
-          $("#progressText").textContent = `章节 ${p.chapter}/${p.total||"?"} 块 ${p.chunk}/${p.chunkTotal}：${p.title}`;
-        } else if (p.phase === "book" || p.phase === "book-merge") {
-          $("#progressText").textContent = `全书总结（${p.phase}）`;
-        }
+    await runIndex({
+      bookAsset: book,
+      apiCfg: api,
+      mode,
+      onProgress: (text, ratio) => {
+        $("#progressText").textContent = text;
+        $("#progressBar").style.width = (ratio * 100).toFixed(0) + "%";
       },
+      log: (line) => {
+        $("#indexLog").textContent += line + "\n";
+        $("#indexLog").scrollTop = $("#indexLog").scrollHeight;
+      },
+      signal: state.abortCtrl.signal,
     });
-    if (result.aborted) log("info", "已取消");
-    else log("info", "✅ 索引完成");
+    flash("索引完成");
+    await renderAssets();
   } catch (e) {
-    log("error", e.message);
+    flash("索引出错：" + e.message);
   } finally {
-    state.abortCtrl = null;
     $("#startIndexBtn").disabled = false;
-    $("#abortBtn").style.display = "none";
-    renderAll();
+    $("#abortIndexBtn").style.display = "none";
   }
 }
 
-// =================== 聊天 ===================
-
-async function sendChat() {
-  const input = $("#chatInput");
-  const text = input.value.trim();
-  if (!text) return;
-  if (!state.apiAlias) { flash("请先在「设置」配置 API"); return; }
-  const apiCfg = Settings.getApi(state.apiAlias);
-  if (!apiCfg) { flash("API 配置缺失"); return; }
-
-  // 收集上下文
-  const ctxParts = [];
-  if (state.selectedAssetIds.size > 0) {
-    for (const aid of state.selectedAssetIds) {
-      const a = await Store.getAsset(state.convId, aid);
-      if (!a) continue;
-      let content = a.content || "";
-      // 若选了 txt，可能很长：按字符截取 + 标注
-      if (a.type === "txt" && content.length > 6000) {
-        content = content.slice(0, 6000) + "\n\n[…原文过长，已截取…]";
-      }
-      ctxParts.push(`【${a.name}】\n${content}`);
-    }
-  }
-  // 拉历史
-  const all = await Store.listAssets(state.convId);
-  const hist = all.filter(a => a.type === "chat").sort((a, b) => a.createdAt - b.createdAt).slice(-20);
-  const messages = [];
-  if (ctxParts.length > 0) {
-    messages.push({ role: "system", content: "以下是从用户资产库中选取的上下文，请结合回答用户问题：\n\n" + ctxParts.join("\n\n---\n\n") });
-  }
-  for (const m of hist) messages.push({ role: m.role, content: m.content });
-  messages.push({ role: "user", content: text });
-
-  // 写 user 消息
-  const userMsg = await Store.addAsset(state.convId, {
-    id: "chat_" + Date.now() + "_u", type: "chat", role: "user", content: text, createdAt: Date.now(),
-  });
-  input.value = "";
-  renderChatPanel();
-
-  // AI 回复（流式）
-  state.abortCtrl = new AbortController();
-  $("#sendBtn").disabled = true;
-  $("#abortBtn").style.display = "";
-
-  // 先插入占位
-  const wrap = $("#chatMsgs");
-  const placeholder = document.createElement("div");
-  placeholder.className = "msg ai streaming";
-  placeholder.innerHTML = `<div class="msg-role">AI</div><div class="msg-body"></div>`;
-  wrap.appendChild(placeholder);
-  wrap.scrollTop = wrap.scrollHeight;
-  const body = placeholder.querySelector(".msg-body");
-
-  let full = "";
-  await callLLM(apiCfg, messages, {
-    signal: state.abortCtrl.signal,
-    onToken: (t) => { full += t; body.textContent = full; wrap.scrollTop = wrap.scrollHeight; },
-    onDone: async () => {
-      await Store.addAsset(state.convId, {
-        id: "chat_" + Date.now() + "_a", type: "chat", role: "assistant", content: full, createdAt: Date.now(),
-      });
-      placeholder.classList.remove("streaming");
-      renderAssets(); // 资产库也会出现 chat
-    },
-    onError: async (e) => {
-      body.textContent = "（生成失败）" + e.message;
-      placeholder.classList.add("error");
-    },
-  });
-
-  state.abortCtrl = null;
-  $("#sendBtn").disabled = false;
-  $("#abortBtn").style.display = "none";
+// ============== 工具 ==============
+function $(s) { return document.querySelector(s); }
+function $$(s) { return Array.from(document.querySelectorAll(s)); }
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+}
+function formatSize(n) {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(n < 10 && i > 0 ? 1 : 0) + " " + u[i];
+}
+let _toastT = null;
+function flash(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(_toastT);
+  _toastT = setTimeout(() => t.classList.remove("show"), 1800);
 }
 
-// =================== 设置 ===================
-
-function renderSettings() {
-  const apis = Settings.listApis();
-  const def = Settings.getDefaults();
-  const list = $("#apiList");
-  list.innerHTML = "";
-  if (apis.length === 0) {
-    list.innerHTML = `<div class="muted">还没有 API 配置，添加一组开始。</div>`;
-  }
-  for (const a of apis) {
-    const row = document.createElement("div");
-    row.className = "api-row";
-    row.innerHTML = `
-      <div class="api-head">
-        <strong>${escapeHtml(a.alias)}</strong>
-        <span class="muted">${escapeHtml(a.model)} · ${escapeHtml(a.base_url)}</span>
-        <button class="btn-mini danger" data-alias="${escapeAttr(a.alias)}" data-act="del">删除</button>
-      </div>
-      <div class="api-key">key: ${"•".repeat(Math.min(12, (a.api_key || "").length))}（明文存于本浏览器）</div>
-    `;
-    row.querySelector("button").onclick = () => {
-      if (confirm(`删除 API「${a.alias}」？`)) {
-        Settings.deleteApi(a.alias);
-        renderSettings();
-        renderApiSelect();
-      }
-    };
-    list.appendChild(row);
-  }
-  $("#defaultApiAlias").value = def.defaultApiAlias || "";
-  $("#chunkSize").value = def.chunkSize;
-  $("#maxConcurrency").value = def.maxConcurrency;
-  $("#splitPattern").value = def.splitPattern || "";
+function autoResizeInput() {
+  const el = $("#chatInput");
+  el.style.height = "auto";
+  el.style.height = Math.min(120, el.scrollHeight) + "px";
 }
 
-function addApiFromForm() {
-  const alias = $("#apiAlias").value.trim();
-  const base_url = $("#apiBaseUrl").value.trim();
-  const api_key = $("#apiKey").value.trim();
-  const model = $("#apiModel").value.trim();
-  if (!alias || !base_url || !api_key || !model) { flash("请填写完整"); return; }
-  Settings.saveApi({ alias, base_url, api_key, model });
-  $("#apiAlias").value = ""; $("#apiBaseUrl").value = ""; $("#apiKey").value = ""; $("#apiModel").value = "";
-  renderSettings(); renderApiSelect();
-  flash("已保存");
-}
-
-// =================== 存储管理 ===================
-
-async function renderStorage() {
-  const { usage, quota } = await Store.estimateStorage();
-  $("#storageTotal").textContent = `${Store.formatBytes(usage)} / ${Store.formatBytes(quota)}（浏览器配额）`;
-  const list = await Store.listConversations();
-  const wrap = $("#storageList");
-  wrap.innerHTML = "";
-  for (const c of list) {
-    const { bytes, assets } = await Store.computeConvSize(c.id);
-    const row = document.createElement("div");
-    row.className = "storage-row";
-    row.innerHTML = `
-      <label class="check"><input type="checkbox" data-cid="${c.id}"></label>
-      <div class="storage-info">
-        <div class="storage-title">${escapeHtml(c.title)}</div>
-        <div class="storage-meta">${assets.length} 项资产 · ${Store.formatBytes(bytes)} · ${new Date(c.updatedAt).toLocaleString()}</div>
-      </div>
-      <button class="btn-mini danger" data-cid="${c.id}" data-act="del">删除</button>
-    `;
-    row.querySelector("button").onclick = async () => {
-      if (!confirm(`确认删除对话「${c.title}」？`)) return;
-      await Store.deleteConversation(c.id);
-      if (c.id === state.convId) {
-        const rest = await Store.listConversations();
-        state.convId = rest[0]?.id || (await Store.createConversation({ title: "新对话" })).id;
-      }
-      renderAll();
-    };
-    wrap.appendChild(row);
-  }
-  $("#delSelectedStorageBtn").onclick = async () => {
-    const ids = $$("#storageList input:checked").map(i => i.dataset.cid);
-    if (ids.length === 0) return flash("请先勾选");
-    if (!confirm(`确认删除 ${ids.length} 个对话？`)) return;
-    await Store.deleteConversations(ids);
-    renderAll();
-  };
-  $("#exportIndexBtn").onclick = () => downloadAllIndexesAsZip(state.convId);
-  }
-
-// =================== 导入/导出/清空 ===================
-
-async function exportAllAsJson() {
-  const list = await Store.listConversations();
-  const payload = { apis: Settings.listApis(), chats: [] };
-  for (const c of list) {
+// ============== 导入导出 ==============
+async function exportAllJson() {
+  const data = { apis: Settings.listApis(), chats: [] };
+  const convs = await Store.listConversations();
+  for (const c of convs) {
     const assets = await Store.listAssets(c.id);
-    payload.chats.push({
-      title: c.title,
-      assets: assets.map(a => ({ ...a })),
-    });
+    data.chats.push({ title: c.title, assets });
   }
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  downloadBlob(blob, `web_novel_reader_backup_${Date.now()}.json`);
-  flash("已导出 JSON");
-}
-
-// 用浏览器原生 CompressionStream 把所有 index 资产打成 .tar.gz 风格（简化为 zip-free：直接合并多文件下载）
-export async function downloadAllIndexesAsZip(convId) {
-  const assets = await Store.listAssets(convId);
-  const indexes = assets.filter(a => a.type && a.type.startsWith("index-"));
-  if (indexes.length === 0) { flash("没有可导出的索引资产"); return; }
-  // 简单做法：每个 index 一个文件下载（浏览器批量下载限制多）
-  // 提供单文件合并下载：合并为一个大 .md
-  const merged = indexes.map(a => `\n\n# ${a.name}\n\n${a.content || ""}`).join("\n\n---\n\n");
-  const blob = new Blob([merged], { type: "text/markdown" });
-  downloadBlob(blob, `index_export_${convId}_${Date.now()}.md`);
-  flash(`已导出 ${indexes.length} 个索引到一个 .md`);
-}
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
-  a.href = url; a.download = filename;
+  a.href = URL.createObjectURL(blob);
+  a.download = `playxyz-export-${Date.now()}.json`;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 500);
+  URL.revokeObjectURL(a.href);
+  flash("已导出");
+}
+
+function importJson() {
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = ".json";
+  inp.onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const txt = await f.text();
+      const data = JSON.parse(txt);
+      if (data.apis) data.apis.forEach(a => Settings.saveApi(a));
+      if (data.chats) {
+        for (const c of data.chats) {
+          const conv = await Store.createConversation({ title: c.title || "导入对话" });
+          for (const a of (c.assets || [])) {
+            await Store.addAsset(conv.id, { ...a, convId: conv.id });
+          }
+        }
+      }
+      await renderAll();
+      flash("导入完成");
+    } catch (err) { alert("导入失败：" + err.message); }
+  };
+  inp.click();
 }
 
 async function clearAll() {
-  if (!confirm("确认清空全部数据（对话 / 资产 / API 配置）？此操作不可恢复。")) return;
-  const list = await Store.listConversations();
-  await Store.deleteConversations(list.map(c => c.id));
-  Settings.saveDefaults({ defaultApiAlias: null });
-  localStorage.removeItem("wnr_apis");
+  if (!confirm("清空全部对话和资产？此操作不可恢复。")) return;
+  const convs = await Store.listConversations();
+  for (const c of convs) await Store.deleteConversation(c.id);
   const nc = await Store.createConversation({ title: "新对话" });
-  state.convId = nc.id;
-  state.apiAlias = null;
-  renderAll();
+  await switchConv(nc.id, false);
   flash("已清空");
 }
 
-// =================== Modal / 工具 ===================
+// ============== 全局事件绑定（同步，在 DOMContentLoaded 时跑） ==============
+export function bindGlobalUI() {
+  // 顶栏
+  $("#menuBtn").onclick = () => {
+    closeDrawerPanels();
+    openDrawer("drawer");
+  };
+  $("#assetBtn").onclick = () => {
+    closeDrawerPanels();
+    openDrawer("assetDrawer");
+  };
+  $("#newConvBtn").onclick = async () => {
+    const c = await Store.createConversation({ title: "新对话 " + new Date().toLocaleTimeString() });
+    await switchConv(c.id);
+  };
 
-function openModal(id) { $("#" + id).classList.add("open"); }
-function closeModal(id) { $("#" + id).classList.remove("open"); }
+  // 抽屉关闭
+  document.querySelectorAll("[data-close-drawer]").forEach(el => el.onclick = closeDrawerPanels);
+  document.querySelectorAll("[data-close-asset]").forEach(el => el.onclick = closeDrawerPanels);
 
-function flash(msg) {
-  const el = $("#toast");
-  el.textContent = msg;
-  el.classList.add("show");
-  setTimeout(() => el.classList.remove("show"), 1800);
+  // 底部
+  $("#uploadBtn").onclick = () => $("#fileInput").click();
+  $("#pickFileBtn").onclick = () => $("#fileInput").click();
+  $("#fileInput").onchange = (e) => onUploadFiles(e.target.files);
+  $("#assetDropZone").ondragover = (e) => { e.preventDefault(); $("#assetDropZone").classList.add("hover"); };
+  $("#assetDropZone").ondragleave = () => $("#assetDropZone").classList.remove("hover");
+  $("#assetDropZone").ondrop = (e) => {
+    e.preventDefault(); $("#assetDropZone").classList.remove("hover");
+    onUploadFiles(e.dataTransfer.files);
+  };
+  $("#mergeBookBtn").onclick = mergeSelectedIntoBook;
+
+  $("#modelBtn").onclick = (e) => {
+    e.stopPropagation();
+    if ($("#modelMenu").style.display === "none" || !$("#modelMenu").style.display) {
+      renderModelMenu();
+    } else {
+      $("#modelMenu").style.display = "none";
+    }
+  };
+  document.addEventListener("click", (e) => {
+    if (!$("#modelMenu").contains(e.target) && e.target.id !== "modelBtn" && !e.target.closest("#modelBtn")) {
+      $("#modelMenu").style.display = "none";
+    }
+  });
+  $("#addModelFromMenuBtn").onclick = () => openModelModal();
+
+  $("#sendBtn").onclick = sendChat;
+  $("#abortBtn").onclick = () => { if (state.abortCtrl) state.abortCtrl.abort(); };
+  $("#chatInput").onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  };
+  $("#chatInput").oninput = autoResizeInput;
+
+  // 模型 Modal
+  $("#saveModelBtn").onclick = saveModelFromForm;
+  $("#delModelBtn").onclick = deleteModelFromForm;
+  document.querySelectorAll("[data-close]").forEach(el => el.onclick = () => closeModal(el.dataset.close));
+
+  // 数据管理
+  $("#exportJsonBtn").onclick = exportAllJson;
+  $("#importJsonBtn").onclick = importJson;
+  $("#clearAllBtn").onclick = clearAll;
+
+  // 默认值
+  $("#saveDefaultsBtn").onclick = () => {
+    Settings.saveDefaults({
+      defaultApiAlias: state.apiAlias,
+      chunkSize: parseInt($("#chunkSize").value, 10) || 1500,
+      maxConcurrency: parseInt($("#maxConcurrency").value, 10) || 3,
+      splitPattern: $("#splitPattern").value.trim() || null,
+    });
+    flash("已保存默认值");
+  };
+
+  // 索引
+  $("#startIndexBtn").onclick = startIndexing;
+  $("#abortIndexBtn").onclick = () => { if (state.abortCtrl) state.abortCtrl.abort(); };
+  // 索引入口：在资产库里加个"开始索引"按钮 — 这里通过长按或点击 book 资产时弹
+  // 简单起见，加在资产库的"合并按钮"旁边
+  // 改为：单独放一个"⚙ 生成索引"按钮到资产库
+  const idxBtn = document.createElement("button");
+  idxBtn.className = "btn-mini";
+  idxBtn.textContent = "⚙ 生成索引";
+  idxBtn.onclick = openIndexerModal;
+  idxBtn.style.marginLeft = "6px";
+  $("#mergeBookBtn").parentElement.appendChild(idxBtn);
 }
-
-function formatSize(n) { return Store.formatBytes(n); }
-function escapeHtml(s) { return String(s ?? "").replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m])); }
-function escapeAttr(s) { return escapeHtml(s); }
