@@ -52,43 +52,6 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
 .icon-btn:hover { background: #f0f0f0; }
 .icon-btn:active { background: #e6e6e6; }
 
-/* ===== 抽屉（左右通用） ===== */
-.drawer {
-  position: fixed; inset: 0;
-  z-index: 200;
-  display: none;
-  pointer-events: none;
-}
-.drawer.open { display: block; pointer-events: auto; }
-.drawer-mask {
-  position: absolute; inset: 0;
-  background: rgba(0,0,0,0.4);
-  animation: fadeIn 0.18s ease;
-}
-.drawer-panel {
-  position: absolute; top: 0; bottom: 0;
-  width: 320px; max-width: 88vw;
-  background: #fff;
-  box-shadow: 2px 0 12px rgba(0,0,0,0.12);
-  padding: 12px;
-  display: flex; flex-direction: column; gap: 10px;
-  overflow-y: auto;
-  animation: slideInL 0.22s cubic-bezier(.2,.8,.2,1);
-}
-.drawer:not(.drawer-right) .drawer-panel { left: 0; }
-.drawer.drawer-right .drawer-panel {
-  right: 0; left: auto;
-  box-shadow: -2px 0 12px rgba(0,0,0,0.12);
-  animation: slideInR 0.22s cubic-bezier(.2,.8,.2,1);
-}
-.drawer-head { display: flex; justify-content: space-between; align-items: center; padding-bottom: 6px; border-bottom: 1px solid #eaecef; }
-.drawer-section { border-top: 1px solid #eaecef; padding-top: 8px; }
-.drawer-h { font-size: 12px; color: #6a737d; margin-bottom: 6px; }
-
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes slideInL { from { transform: translateX(-100%); } to { transform: translateX(0); } }
-@keyframes slideInR { from { transform: translateX(100%); } to { transform: translateX(0); } }
-
 /* ===== 聊天主区 ===== */
 .chat-main {
   flex: 1 1 auto;
@@ -97,8 +60,8 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
   -webkit-overflow-scrolling: touch;
 }
 .chat-msgs {
-  padding: 12px;
-  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 10px;
+  display: flex; flex-direction: column; gap: 8px;
   min-height: 100%;
 }
 .empty-hint {
@@ -142,50 +105,6 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
   border-radius: 6px;
   box-shadow: none;
 }
-/* 微信风格不再显示气泡内的角色文字标签——位置本身已区分左右 */
-.msg-role { display: none; }
-
-/* 视觉上更像微信：相邻两条同向消息紧凑一点 */
-.chat-msgs { gap: 8px; padding: 12px 10px; }
-
-/* ===== NVIDIA 一键识别（模型弹窗顶部） ===== */
-.nvidia-paste details {
-  background: linear-gradient(180deg, #f7faff 0%, #eef4ff 100%);
-  border: 1px solid #d0d7de;
-  border-radius: 8px;
-  padding: 8px 10px;
-  margin-bottom: 10px;
-}
-.nvidia-paste summary {
-  cursor: pointer;
-  font-size: 13px;
-  color: #2f7cf6;
-  font-weight: 600;
-  list-style: none;
-  user-select: none;
-}
-.nvidia-paste summary::-webkit-details-marker { display: none; }
-.nvidia-paste summary::before { content: "▸ "; font-size: 11px; color: #6a737d; }
-.nvidia-paste details[open] summary::before { content: "▾ "; }
-.nvidia-paste .paste-hint { margin: 6px 0 6px; line-height: 1.6; }
-.nvidia-paste textarea {
-  width: 100%;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  padding: 6px 8px;
-  border: 1px solid #d0d7de;
-  border-radius: 6px;
-  background: #fff;
-  resize: vertical;
-  min-height: 90px;
-  color: #1f2328;
-}
-.nvidia-paste textarea:focus { outline: 0; border-color: #2f7cf6; box-shadow: 0 0 0 3px rgba(47,124,246,0.15); }
-.nvidia-paste .or-divider { border: 0; border-top: 1px dashed #d0d7de; margin: 8px 0 6px; }
-.btn-mini.primary {
-  background: #2f7cf6; color: #fff; border-color: #2f7cf6;
-}
-.btn-mini.primary:hover { background: #1f6ae0; border-color: #1f6ae0; }
 
 /* ===== 底部输入条 ===== */
 .chat-foot {
@@ -264,15 +183,15 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
 .model-menu {
   position: fixed;
   bottom: 64px;
-  left: 60px;
+  left: 12px;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   box-shadow: 0 6px 24px rgba(0,0,0,0.12);
   padding: 8px;
   z-index: 60;
-  width: 220px;
-  max-width: 70vw;
+  width: 240px;
+  max-width: 78vw;
 }
 .model-menu-head { font-size: 12px; color: #6a737d; padding: 4px 6px; }
 .model-menu-item {
@@ -285,61 +204,6 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
 .model-menu-item:hover { background: #f0f0f0; }
 .model-menu-item.active { background: #e7f0ff; color: #2f7cf6; }
 .model-menu-item .edit { color: #6a737d; font-size: 12px; }
-
-/* ===== 资产库 ===== */
-.drop-zone {
-  border: 2px dashed #d0d7de;
-  border-radius: 10px;
-  padding: 20px;
-  text-align: center;
-  color: #6a737d;
-  background: #fafbfc;
-  transition: all 0.18s;
-  margin: 6px 0;
-}
-.drop-zone.mini { padding: 12px; }
-.drop-zone.hover { border-color: #2f7cf6; background: #f0f6ff; color: #2f7cf6; }
-.drop-zone p { margin: 4px 0; }
-.asset-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
-.asset-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 10px;
-  background: #fff;
-  border: 1px solid #eaecef;
-  border-radius: 8px;
-}
-.asset-row .check { display: flex; align-items: center; }
-.asset-row .asset-info { flex: 1; min-width: 0; }
-.asset-row .asset-name {
-  font-size: 13px; font-weight: 500;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.asset-row .asset-name .tag {
-  display: inline-block;
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  background: #eaecef;
-  color: #6a737d;
-  margin-right: 4px;
-  vertical-align: 1px;
-}
-.asset-row .asset-meta { font-size: 11px; color: #6a737d; }
-.asset-row .asset-actions { display: flex; gap: 4px; }
-
-/* ===== 历史对话 ===== */
-.history-list { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow-y: auto; }
-.conv-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.conv-row:hover { background: #f0f0f0; }
-.conv-row.active { background: #e7f0ff; color: #2f7cf6; }
-.conv-info { flex: 1; min-width: 0; }
-.conv-title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conv-meta { font-size: 11px; color: #6a737d; }
 
 /* ===== 通用按钮 ===== */
 .btn-mini {
@@ -354,8 +218,10 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
 .btn-mini:active { background: #eaecef; }
 .btn-mini.danger { color: #991b1b; border-color: #fecaca; background: #fff5f5; }
 .btn-mini.danger:hover { background: #fee2e2; }
-.btn-block { width: 100%; padding: 8px 12px; border: 0; background: #f0f0f0; border-radius: 6px; font-size: 13px; text-align: left; }
-.btn-block:hover { background: #e6e6e6; }
+.btn-mini.primary {
+  background: #2f7cf6; color: #fff; border-color: #2f7cf6;
+}
+.btn-mini.primary:hover { background: #1f6ae0; border-color: #1f6ae0; }
 
 /* ===== 表单 ===== */
 .form-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
@@ -392,7 +258,7 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
   box-shadow: 0 8px 30px rgba(0,0,0,0.18);
   animation: scaleIn 0.18s ease;
 }
-.modal-card.large { max-width: 92vw; width: 720px; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes scaleIn { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .modal-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -401,6 +267,41 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
 }
 .modal-title { font-size: 15px; font-weight: 600; }
 .modal-body { padding: 14px; overflow-y: auto; flex: 1; }
+
+/* ===== NVIDIA 一键识别（模型弹窗顶部） ===== */
+.nvidia-paste details {
+  background: linear-gradient(180deg, #f7faff 0%, #eef4ff 100%);
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.nvidia-paste summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #2f7cf6;
+  font-weight: 600;
+  list-style: none;
+  user-select: none;
+}
+.nvidia-paste summary::-webkit-details-marker { display: none; }
+.nvidia-paste summary::before { content: "▸ "; font-size: 11px; color: #6a737d; }
+.nvidia-paste details[open] summary::before { content: "▾ "; }
+.nvidia-paste .paste-hint { margin: 6px 0 6px; line-height: 1.6; }
+.nvidia-paste textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  resize: vertical;
+  min-height: 90px;
+  color: #1f2328;
+}
+.nvidia-paste textarea:focus { outline: 0; border-color: #2f7cf6; box-shadow: 0 0 0 3px rgba(47,124,246,0.15); }
+.nvidia-paste .or-divider { border: 0; border-top: 1px dashed #d0d7de; margin: 8px 0 6px; }
 
 /* ===== 进度 / 日志 ===== */
 .progress-wrap { background: #f0f0f0; border-radius: 6px; padding: 8px; }
@@ -421,6 +322,8 @@ code { background: #f0f0f0; padding: 0 4px; border-radius: 3px; font-size: 12px;
   font-size: 13px; z-index: 500;
   pointer-events: none;
   opacity: 0; transition: opacity 0.2s;
+  max-width: 86vw;
+  text-align: center;
 }
 .toast.show { opacity: 1; }
 
